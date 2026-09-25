@@ -11,3 +11,9 @@ pandas>=2.0.0
 faiss-cpu>=1.7.4
 pydssp>=0.9.0
 
+# LangGraph harness 
+langgraph>=0.2.0
+langchain-core>=0.2.0
+langsmith>=0.1.0
+langchain-openai>=0.1.0
+
