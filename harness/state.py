@@ -1,0 +1,154 @@
+"""
+AgentState schema shared across all LangGraph nodes.
+
+See .claude/plan/state_schema.md for the field-by-field spec.
+"""
+
+from dataclasses import dataclass, field
+from typing import Annotated, Optional, TypedDict
+
+from langgraph.graph.message import add_messages
+
+
+@dataclass
+class PeptideDescriptors:
+    sequence: str
+    length: int
+    net_charge: int
+    hydro_pct: float
+    gravy: float
+    aromaticity: float
+    mol_weight: float
+    charge_class: str
+    length_class: str
+
+
+@dataclass
+class DiagnosticResult:
+    passed: bool
+    violations: list
+    fitness: float
+    n_violations: int
+
+
+@dataclass
+class EditOperation:
+    operation: str
+    position: int
+    from_aa: str
+    to_aa: str
+    reason: str
+    component: str
+
+
+@dataclass
+class CandidateResult:
+    sequence: str
+    descriptors: Optional[PeptideDescriptors]
+    bleu_score: float
+    rulebook: Optional[DiagnosticResult]
+    plddt: Optional[float]
+    helix_pct: Optional[float]
+    novelty: Optional[float]
+    closest_match: Optional[str]
+    iteration: int
+    edit_op: Optional[EditOperation]
+
+
+class AgentState(TypedDict):
+    # Task specification
+    activity: str
+    length_min: int
+    length_max: int
+    charge_min: int
+    charge_max: int
+    hydro_min: float
+    hydro_max: float
+    threshold: float
+    max_retries: int
+
+    # Generation state
+    iteration: int
+    current_sequence: str
+    current_score: float
+    current_descriptors: Optional[PeptideDescriptors]
+    current_diagnostic: Optional[DiagnosticResult]
+
+    # RAG context
+    rag_examples: list
+    reference: str
+    reference_source: str
+
+    # Candidates
+    candidates: list
+    best_passing: Optional[CandidateResult]
+    best_overall: Optional[CandidateResult]
+
+    # Edit tracking
+    last_edit_op: Optional[EditOperation]
+    edit_history: list
+    consecutive_stuck: int
+    # set[int] would need custom merge handling in LangGraph state
+    # updates — using list[int] instead per state_schema.md's
+    # implementation note.
+    changed_positions: list
+
+    # Post-hoc
+    plddt_score: Optional[float]
+    helix_pct: Optional[float]
+    novelty_score: Optional[float]
+    closest_match: Optional[str]
+
+    # Control flow
+    early_stop: bool
+    error: Optional[str]
+    status: str
+    # pending -> generating -> scoring -> validating
+    # -> deciding -> editing -> complete -> failed
+
+    # Messages (for slash commands, Week 3)
+    messages: Annotated[list, add_messages]
+
+
+def create_initial_state(**overrides) -> AgentState:
+    """Build an AgentState dict populated with defaults, overridden by kwargs.
+
+    TypedDict has no runtime defaults, so callers use this factory instead
+    of instantiating AgentState() directly.
+    """
+    state: AgentState = {
+        "activity": "",
+        "length_min": 10,
+        "length_max": 50,
+        "charge_min": 2,
+        "charge_max": 5,
+        "hydro_min": 30.0,
+        "hydro_max": 50.0,
+        "threshold": 0.35,
+        "max_retries": 6,
+        "iteration": 0,
+        "current_sequence": "",
+        "current_score": 0.0,
+        "current_descriptors": None,
+        "current_diagnostic": None,
+        "rag_examples": [],
+        "reference": "",
+        "reference_source": "",
+        "candidates": [],
+        "best_passing": None,
+        "best_overall": None,
+        "last_edit_op": None,
+        "edit_history": [],
+        "consecutive_stuck": 0,
+        "changed_positions": [],
+        "plddt_score": None,
+        "helix_pct": None,
+        "novelty_score": None,
+        "closest_match": None,
+        "early_stop": False,
+        "error": None,
+        "status": "pending",
+        "messages": [],
+    }
+    state.update(overrides)
+    return state
