@@ -5,7 +5,14 @@ Pure function over a raw sequence string — no backend imports, no I/O.
 See .claude/plan/week1.md Task 4 for the spec.
 """
 
+import os
+import sys
 from dataclasses import asdict
+
+# Allow `python harness/descriptor.py` to find the `harness` package —
+# running the file directly puts harness/ itself on sys.path, not its
+# parent, so `import harness.xyz` fails without this.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from harness.state import PeptideDescriptors
 
