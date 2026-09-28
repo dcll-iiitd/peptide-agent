@@ -157,6 +157,24 @@ def blast_novelty_tool(sequence: str, top_k: int = 1) -> dict:
 
 
 @tool
+def novelty_tool(sequence: str) -> dict:
+    """Novelty check with full closest-match details (Component 3).
+
+    BLAST against the local 105K database first; falls back to a FAISS
+    property-space nearest-neighbor lookup if BLAST isn't available.
+
+    Returns {similarity, novelty_label, closest_match, closest_length,
+    closest_charge, closest_activity, is_novel, database}.
+    """
+    try:
+        from harness.novelty import assess_novelty_detailed
+
+        return assess_novelty_detailed(sequence)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@tool
 def reference_selector_tool(
     preset: str,
     target_length: int,
@@ -196,5 +214,6 @@ ALL_TOOLS = [
     esmfold_tool,
     dssp_tool,
     blast_novelty_tool,
+    novelty_tool,
     reference_selector_tool,
 ]
