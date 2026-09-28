@@ -14,7 +14,13 @@ import os
 import shutil
 import subprocess
 import tempfile
-import pandas as pd
+
+try:
+    import pandas as pd
+    _PANDAS_OK = True
+except ImportError:
+    pd = None
+    _PANDAS_OK = False
 
 # Paths — DATASET_PATH shares the same env var/default as backend/rag/peptide_retriever.py
 # (data/peptides.csv is the real dataset file in this repo, not peptides_dataset.csv).
@@ -73,6 +79,10 @@ def build_blast_db(
     Only needs to run once — database saved to disk.
     Returns True if successful, False otherwise.
     """
+    if not _PANDAS_OK:
+        print("[BLAST] pandas not available. Cannot build database.")
+        return False
+
     if not _check_makeblastdb_available():
         print("[BLAST] makeblastdb not found. "
               "Install: sudo apt-get install ncbi-blast+")
@@ -164,6 +174,9 @@ def assess_novelty(
     if not sequence or not is_natural(sequence):
         return _empty("Invalid sequence")
 
+    if not _PANDAS_OK:
+        return _empty("pandas not available — cannot parse BLAST output")
+
     if not _check_blast_available():
         return _empty(
             "BLAST not installed. "
@@ -218,6 +231,7 @@ def assess_novelty(
 
         # Parse results
         scores = []
+        top_id = None
         if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
             cols = [
                 "qseqid", "sseqid", "pident",
@@ -232,8 +246,13 @@ def assess_novelty(
             )
             all_scores = df_sorted["similarity_score"].round(4).tolist()
             scores = all_scores[:top_k] if top_k > 0 else all_scores
+            if not df_sorted.empty:
+                top_id = str(df_sorted.iloc[0]["sseqid"])
 
         top_score = scores[0] if scores else 0.0
+        closest_sequence = (
+            _lookup_fasta_sequence(f"{BLAST_DB_PATH}.fasta", top_id) if top_id else None
+        )
 
         # Novelty label
         if not scores:
@@ -272,6 +291,8 @@ def assess_novelty(
             "blast_available": True,
             "db_exists": True,
             "error": None,
+            "closest_match_id": top_id,
+            "closest_match_sequence": closest_sequence,
         }
 
     except subprocess.TimeoutExpired:
@@ -287,6 +308,22 @@ def assess_novelty(
                     pass
 
 
+def _lookup_fasta_sequence(fasta_path: str, header_id: str) -> str | None:
+    """Resolve a BLAST sseqid (e.g. 'known_42') back to its sequence text
+    by reading the same FASTA file the BLAST DB was built from."""
+    if not header_id or not os.path.exists(fasta_path):
+        return None
+    try:
+        with open(fasta_path) as f:
+            lines = f.read().splitlines()
+        for i, line in enumerate(lines):
+            if line.startswith(">") and line[1:].strip() == header_id:
+                return lines[i + 1].strip() if i + 1 < len(lines) else None
+    except Exception:
+        return None
+    return None
+
+
 def _empty(error: str) -> dict:
     return {
         "similarity_score": None,
@@ -296,6 +333,8 @@ def _empty(error: str) -> dict:
         "blast_available": _check_blast_available(),
         "db_exists": _db_exists(),
         "error": error,
+        "closest_match_id": None,
+        "closest_match_sequence": None,
     }
 
 

@@ -24,12 +24,12 @@ from langgraph.graph import END, START, StateGraph
 from harness.state import AgentState, CandidateResult, EditOperation, create_initial_state
 from harness.tools import (
     descriptor_tool,
+    diagnostic_tool,
     dssp_tool,
     esmfold_tool,
     peptide_bleu_tool,
     rag_retrieval_tool,
     reference_selector_tool,
-    rulebook_tool,
 )
 
 
@@ -142,15 +142,20 @@ def validate_node(state: AgentState) -> dict:
     from harness.state import DiagnosticResult
 
     task = _build_task(state)
-    validation = rulebook_tool.invoke({"sequence": state["current_sequence"], "task": task})
+    result = diagnostic_tool.invoke({"sequence": state["current_sequence"], "task": task})
 
-    issues = validation.get("issues", [])
-    diagnostic = DiagnosticResult(
-        passed=bool(validation.get("valid", False)),
-        violations=[{"rule": issue} for issue in issues],
-        fitness=validation.get("score", 0.0),
-        n_violations=len(issues),
-    )
+    if "error" in result:
+        # diagnostic_tool never raises, but a genuinely broken sequence
+        # (e.g. empty extraction) can still surface here — fail closed
+        # rather than let a malformed dict propagate into track_best_node.
+        diagnostic = DiagnosticResult(passed=False, violations=[], fitness=0.0, n_violations=0)
+    else:
+        diagnostic = DiagnosticResult(
+            passed=result["passed"],
+            violations=result["violations"],
+            fitness=result["fitness"],
+            n_violations=result["n_violations"],
+        )
 
     return {"current_diagnostic": diagnostic, "status": "deciding"}
 
