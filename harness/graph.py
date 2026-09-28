@@ -18,9 +18,9 @@ directly) — never duplicated here.
 
 import uuid
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from harness.memory import get_checkpointer
 from harness.state import AgentState, CandidateResult, EditOperation, create_initial_state
 from harness.tools import (
     descriptor_tool,
@@ -465,7 +465,7 @@ def build_graph():
     graph.add_edge("edit", "score")
     graph.add_edge("post_hoc", END)
 
-    return graph.compile(checkpointer=MemorySaver())
+    return graph.compile(checkpointer=get_checkpointer())
 
 
 def run_pepforge(thread_id: str | None = None, **task_overrides) -> dict:
