@@ -175,6 +175,47 @@ def novelty_tool(sequence: str) -> dict:
 
 
 @tool
+def edit_operator_tool(
+    sequence: str, task: dict, scores: dict | None = None, violations: list | None = None
+) -> dict:
+    """Ask the LLM for ONE structured edit instruction and apply it deterministically.
+
+    Replaces free-form "rewrite the whole sequence" edits — the LLM returns
+    a single {operation, position, from_aa, to_aa} instruction, and
+    apply_edit() validates it against the real sequence before applying, so
+    an invalid edit (wrong from_aa, out-of-range position) is structurally
+    impossible to actually apply — it falls back to the unchanged sequence.
+
+    Returns {operation: dict|None, new_sequence: str, valid: bool,
+    reason_rejected: str|None}.
+    """
+    try:
+        from dataclasses import asdict
+
+        from harness.edit_operator import apply_edit, generate_edit_operation
+
+        op = generate_edit_operation(sequence, task, scores, violations)
+        if op is None:
+            return {
+                "operation": None,
+                "new_sequence": sequence,
+                "valid": False,
+                "reason_rejected": "LLM did not return a usable edit instruction",
+            }
+
+        new_sequence = apply_edit(sequence, op)
+        valid = new_sequence != sequence
+        return {
+            "operation": asdict(op),
+            "new_sequence": new_sequence,
+            "valid": valid,
+            "reason_rejected": None if valid else "edit failed validation (position/from_aa mismatch)",
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@tool
 def reference_selector_tool(
     preset: str,
     target_length: int,
@@ -215,5 +256,6 @@ ALL_TOOLS = [
     dssp_tool,
     blast_novelty_tool,
     novelty_tool,
+    edit_operator_tool,
     reference_selector_tool,
 ]
