@@ -212,24 +212,194 @@ def track_best_node(state: AgentState) -> dict:
     }
 
 
-def edit_node(state: AgentState) -> dict:
+def _edit_valid_aa(sequence: str, v: dict):
+    positions = v.get("positions") or []
+    if not positions:
+        return None
+    pos = positions[0]
+    from_aa = sequence[pos - 1]
+    to_aa = "A"
+    new_seq = sequence[: pos - 1] + to_aa + sequence[pos:]
+    op = EditOperation(
+        operation="substitute", position=pos, from_aa=from_aa, to_aa=to_aa,
+        reason=v["fix"], component="valid_aa",
+    )
+    return new_seq, op
+
+
+def _edit_length(sequence: str, v: dict):
+    try:
+        lo, hi = (int(x) for x in v["target"].split("-"))
+    except (ValueError, KeyError):
+        return None
+    current = v["current"]
+    if current < lo:
+        # Close the whole deficit in one edit, not one residue per lap — the
+        # fix hint already gives the exact count needed, and unlike charge/
+        # hydro (continuous, risk of overshoot) length is a hard discrete
+        # constraint with no benefit to spreading the fix across iterations.
+        # A degenerate 4-char extraction against a 15-25 target would
+        # otherwise need 11 separate edit laps to ever reach a valid length.
+        deficit = lo - current
+        padding = "A" * deficit
+        new_seq = sequence + padding
+        op = EditOperation(
+            operation="insert", position=len(sequence) + 1, from_aa="", to_aa=padding,
+            reason=v["fix"], component="length",
+        )
+    elif current > hi:
+        excess_len = current - hi
+        removed = sequence[-excess_len:]
+        new_seq = sequence[:-excess_len]
+        op = EditOperation(
+            operation="delete", position=len(sequence) - excess_len + 1, from_aa=removed, to_aa="",
+            reason=v["fix"], component="length",
+        )
+    else:
+        return None
+    return new_seq, op
+
+
+def _edit_net_charge(sequence: str, v: dict):
+    positions = v.get("positions") or []
+
+    if v["excess"] > 0:
+        # Too high: neutralize a K/R. No fallback if none are present —
+        # that would mean the charge is already <= target, contradicting
+        # excess > 0, so positions is never empty on this branch.
+        if not positions:
+            return None
+        pos = positions[0]
+        from_aa = sequence[pos - 1]
+        to_aa = "Q"
+        new_seq = sequence[: pos - 1] + to_aa + sequence[pos:]
+        op = EditOperation(
+            operation="substitute", position=pos, from_aa=from_aa, to_aa=to_aa,
+            reason=v["fix"], component="net_charge",
+        )
+        return new_seq, op
+
+    # Too low: prefer converting an existing D/E straight to K (a +2 swing,
+    # cheaper than inserting). If there are no D/E to convert, insert a new
+    # K instead — without this, a sequence with no negative residues could
+    # never fix a too-low charge violation and would stay stuck forever.
+    if positions:
+        pos = positions[0]
+        from_aa = sequence[pos - 1]
+        to_aa = "K"
+        new_seq = sequence[: pos - 1] + to_aa + sequence[pos:]
+        op = EditOperation(
+            operation="substitute", position=pos, from_aa=from_aa, to_aa=to_aa,
+            reason=v["fix"], component="net_charge",
+        )
+    else:
+        to_aa = "K"
+        new_seq = sequence + to_aa
+        op = EditOperation(
+            operation="insert", position=len(sequence) + 1, from_aa="", to_aa=to_aa,
+            reason=v["fix"], component="net_charge",
+        )
+    return new_seq, op
+
+
+def _edit_hydrophobicity(sequence: str, v: dict):
+    positions = v.get("positions") or []
+    if not positions:
+        return None
+    pos = positions[0]
+    from_aa = sequence[pos - 1]
+    to_aa = "S" if v["excess"] > 0 else "L"
+    new_seq = sequence[: pos - 1] + to_aa + sequence[pos:]
+    op = EditOperation(
+        operation="substitute", position=pos, from_aa=from_aa, to_aa=to_aa,
+        reason=v["fix"], component="hydrophobicity",
+    )
+    return new_seq, op
+
+
+def _edit_poly_proline(sequence: str, v: dict):
+    positions = v.get("positions") or []
+    if not positions:
+        return None
+    start = positions[0]
+    run_len = v["current"]
+    mid = start + run_len // 2
+    if not (1 <= mid <= len(sequence)):
+        return None
+    from_aa = sequence[mid - 1]
+    to_aa = "G"
+    new_seq = sequence[: mid - 1] + to_aa + sequence[mid:]
+    op = EditOperation(
+        operation="substitute", position=mid, from_aa=from_aa, to_aa=to_aa,
+        reason=v["fix"], component="poly_proline",
+    )
+    return new_seq, op
+
+
+def _edit_cysteine_parity(sequence: str, v: dict):
+    positions = v.get("positions") or []
+    if not positions:
+        return None
+    pos = positions[-1]
+    from_aa = sequence[pos - 1]
+    to_aa = "A"
+    new_seq = sequence[: pos - 1] + to_aa + sequence[pos:]
+    op = EditOperation(
+        operation="substitute", position=pos, from_aa=from_aa, to_aa=to_aa,
+        reason=v["fix"], component="cysteine_parity",
+    )
+    return new_seq, op
+
+
+_VIOLATION_HANDLERS = {
+    "valid_aa": _edit_valid_aa,
+    "length": _edit_length,
+    "net_charge": _edit_net_charge,
+    "hydrophobicity": _edit_hydrophobicity,
+    "poly_proline": _edit_poly_proline,
+    "cysteine_parity": _edit_cysteine_parity,
+}
+
+
+def _apply_targeted_edit(sequence: str, diagnostic, task: dict):
+    """Apply one single-residue edit targeting the first violation with a
+    usable positional handler (activity_specific:* violations have no
+    positions of their own and fall through to the generic fallback below).
+    """
+    for v in diagnostic.violations:
+        rule = v["rule"].split(":")[0]
+        handler = _VIOLATION_HANDLERS.get(rule)
+        if handler:
+            result = handler(sequence, v)
+            if result:
+                return result
+
     from backend.tools.sequence_editor import deterministic_edit
 
-    task = _build_task(state)
-    edited = deterministic_edit(state["current_sequence"], task)
-
-    edit_op = EditOperation(
-        operation="deterministic_edit",
-        position=0,
-        from_aa="",
-        to_aa="",
-        # deterministic_edit fixes length/charge/hydro over the whole
-        # sequence in one pass rather than a single named residue swap —
-        # Week 3's edit_operator_menu replaces this with real
-        # {operation, position, from, to} structured edits.
-        reason="length/charge/hydrophobicity fix",
+    edited = deterministic_edit(sequence, task)
+    op = EditOperation(
+        operation="deterministic_edit", position=0, from_aa="", to_aa="",
+        reason="no targetable violation — generic length/charge/hydro fix",
         component="rulebook",
     )
+    return (edited if edited else sequence), op
+
+
+def edit_node(state: AgentState) -> dict:
+    task = _build_task(state)
+    diagnostic = state["current_diagnostic"]
+
+    if diagnostic and diagnostic.violations:
+        edited, edit_op = _apply_targeted_edit(state["current_sequence"], diagnostic, task)
+    else:
+        from backend.tools.sequence_editor import deterministic_edit
+
+        edited = deterministic_edit(state["current_sequence"], task)
+        edit_op = EditOperation(
+            operation="deterministic_edit", position=0, from_aa="", to_aa="",
+            reason="no violations recorded — generic length/charge/hydro fix",
+            component="rulebook",
+        )
 
     return {
         "current_sequence": edited if edited else state["current_sequence"],
