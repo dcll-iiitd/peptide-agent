@@ -1,4 +1,4 @@
-# PepForge — Agentic Peptide Generation System
+# PepForge - Agentic Peptide Generation System
 
 Research project at IIIT-Delhi. PepForge is an agentic iterative-refinement system for peptide sequence design: instead of asking a LLM for a peptide once (or best-of-N), it generates once, then repeatedly **validates, scores, and edits** the sequence toward its weakest property, the same generate → validate → score → edit loop a human designer would run by hand. The research claim this whole project exists to test is that this loop beats plain-LLM prompting on the same base model, measured by **PeptideBLEU**, a 7-component reference-similarity metric purpose-built for peptides (n-gram overlap, charge, hydrophobicity, functional groups, property distribution, structural plausibility, BLOSUM62 substitution similarity).
 

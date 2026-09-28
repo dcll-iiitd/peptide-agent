@@ -86,6 +86,24 @@ def rulebook_tool(sequence: str, task: dict) -> dict:
 
 
 @tool
+def diagnostic_tool(sequence: str, task: dict) -> dict:
+    """Run the actionable diagnostic rule checker against a sequence.
+
+    Unlike rulebook_tool, each violation carries current/target/excess/fix/
+    positions so an edit step can target exact residues instead of a plain
+    pass/fail. Returns {passed, violations, fitness, n_violations}.
+    """
+    try:
+        from dataclasses import asdict
+
+        from harness.diagnostic import check_sequence
+
+        return asdict(check_sequence(sequence, task))
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@tool
 def esmfold_tool(sequence: str) -> dict:
     """Fold a peptide sequence with ESMFold and return pLDDT confidence.
 
@@ -174,6 +192,7 @@ ALL_TOOLS = [
     descriptor_tool,
     peptide_bleu_tool,
     rulebook_tool,
+    diagnostic_tool,
     esmfold_tool,
     dssp_tool,
     blast_novelty_tool,

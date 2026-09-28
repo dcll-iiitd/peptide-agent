@@ -31,7 +31,9 @@ def test_descriptor_calculator():
 def test_tools():
     from harness.tools import ALL_TOOLS, descriptor_tool
 
-    assert len(ALL_TOOLS) == 8, f"expected 8 tools, got {len(ALL_TOOLS)}"
+    # >= 8, not ==: Week 1 wrapped exactly 8 tools, but later weeks add more
+    # (e.g. diagnostic_tool in Week 2) without invalidating this check.
+    assert len(ALL_TOOLS) >= 8, f"expected at least 8 tools, got {len(ALL_TOOLS)}"
 
     result = descriptor_tool.invoke({"sequence": "ALWKGIGKFLPKKKFGKAFLGEIMNS"})
     assert "error" not in result, result
