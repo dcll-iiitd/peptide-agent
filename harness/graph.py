@@ -20,6 +20,7 @@ import uuid
 
 from langgraph.graph import END, START, StateGraph
 
+from harness.guardrails import input_guardrail, output_guardrail
 from harness.memory import get_checkpointer
 from harness.state import AgentState, CandidateResult, EditOperation, create_initial_state
 from harness.tools import (
@@ -475,9 +476,15 @@ def route_after_track(state: AgentState) -> str:
     return "edit"
 
 
+def route_after_input_guardrail(state: AgentState) -> str:
+    # Fail fast on a malformed task spec — don't waste an LLM call.
+    return "end" if state["error"] else "rag"
+
+
 def build_graph():
     graph = StateGraph(AgentState)
 
+    graph.add_node("input_guardrail", input_guardrail)
     graph.add_node("rag", rag_node)
     graph.add_node("generate", generate_node)
     graph.add_node("score", score_node)
@@ -485,8 +492,12 @@ def build_graph():
     graph.add_node("track", track_best_node)
     graph.add_node("edit", edit_node)
     graph.add_node("post_hoc", post_hoc_node)
+    graph.add_node("output_guardrail", output_guardrail)
 
-    graph.add_edge(START, "rag")
+    graph.add_edge(START, "input_guardrail")
+    graph.add_conditional_edges(
+        "input_guardrail", route_after_input_guardrail, {"rag": "rag", "end": END}
+    )
     graph.add_edge("rag", "generate")
     graph.add_edge("generate", "score")
     graph.add_edge("score", "validate")
@@ -495,7 +506,8 @@ def build_graph():
         "track", route_after_track, {"post_hoc": "post_hoc", "edit": "edit"}
     )
     graph.add_edge("edit", "score")
-    graph.add_edge("post_hoc", END)
+    graph.add_edge("post_hoc", "output_guardrail")
+    graph.add_edge("output_guardrail", END)
 
     return graph.compile(checkpointer=get_checkpointer())
 
