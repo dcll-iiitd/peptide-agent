@@ -146,6 +146,10 @@ def handle_generate(args: list, thread_id: str) -> dict:
     steps = []
     for update in app.stream(initial_state, config=run_config):
         for node_name, node_output in update.items():
+            # LangGraph reports a node's output as None (not {}) when the
+            # node returns an empty dict — e.g. input_guardrail's success
+            # path returns {} (no changes needed).
+            node_output = node_output or {}
             steps.append(
                 {
                     "node": node_name,
