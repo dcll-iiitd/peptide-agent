@@ -113,6 +113,12 @@ class AgentState(TypedDict):
     # pending -> generating -> scoring -> validating
     # -> deciding -> editing -> complete -> failed
 
+    # Human-in-the-loop (Week 4 task 1) — default False, opt-in only.
+    hitl_enabled: bool
+    # Transient one-lap flag: a researcher's "modify" decision routes
+    # straight back to score_node instead of edit_node, then resets.
+    hitl_modified: bool
+
     # Messages (for slash commands, Week 3)
     messages: Annotated[list, add_messages]
 
@@ -158,6 +164,8 @@ def create_initial_state(**overrides) -> AgentState:
         "early_stop": False,
         "error": None,
         "status": "pending",
+        "hitl_enabled": False,
+        "hitl_modified": False,
         "messages": [],
     }
     state.update(overrides)

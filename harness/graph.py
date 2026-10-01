@@ -218,7 +218,7 @@ def track_best_node(state: AgentState) -> dict:
         stats["avg_delta"] = (stats["avg_delta"] * (stats["count"] - 1) + delta) / stats["count"]
         edit_stats[op_type] = stats
 
-    return {
+    result = {
         "candidates": candidates,
         "iteration": iteration,
         "best_overall": best_overall,
@@ -230,8 +230,17 @@ def track_best_node(state: AgentState) -> dict:
         # the iteration>=max_retries cap is enforced separately by
         # route_after_track, not folded into this flag.
         "early_stop": best_passing is not None,
+        "hitl_modified": False,
         "status": "deciding",
     }
+
+    if state["hitl_enabled"] and best_passing is not None:
+        from harness.hitl import apply_decision, request_approval
+
+        decision = request_approval(best_passing, iteration)
+        result.update(apply_decision(decision, state))
+
+    return result
 
 
 def _edit_valid_aa(sequence: str, v: dict):
@@ -490,6 +499,11 @@ def post_hoc_node(state: AgentState) -> dict:
 
 
 def route_after_track(state: AgentState) -> str:
+    # A researcher's "modify" decision (HITL) provides an already-edited
+    # sequence — route straight back to score_node, not through edit_node,
+    # since it shouldn't be edited again before being scored.
+    if state["hitl_modified"]:
+        return "score"
     if state["early_stop"] or state["iteration"] >= state["max_retries"]:
         return "post_hoc"
     return "edit"
@@ -522,7 +536,7 @@ def build_graph():
     graph.add_edge("score", "validate")
     graph.add_edge("validate", "track")
     graph.add_conditional_edges(
-        "track", route_after_track, {"post_hoc": "post_hoc", "edit": "edit"}
+        "track", route_after_track, {"post_hoc": "post_hoc", "edit": "edit", "score": "score"}
     )
     graph.add_edge("edit", "score")
     graph.add_edge("post_hoc", "output_guardrail")
