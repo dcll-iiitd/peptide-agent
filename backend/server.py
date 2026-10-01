@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
@@ -63,6 +63,14 @@ class GenerateRequest(BaseModel):
     max_retries: int = Field(6, ge=1, le=10)
     threshold: float = Field(0.35, ge=0.0, le=1.0)
     prompt_override: str | None = None
+    # Week 4 task 3 — only meaningful when POST /generate?harness=true;
+    # ignored entirely by the legacy PepForgeAgent path below.
+    hitl_enabled: bool = False
+
+
+class ResumeRequest(BaseModel):
+    thread_id: str
+    decision: dict
 
 # ── SSE streaming endpoint ───────────────────────────────────────────────────
 
@@ -242,9 +250,55 @@ async def _generate_stream(req: GenerateRequest) -> AsyncIterator[dict]:
         yield {"data": json.dumps(final)}
 
 
+def _harness_task_overrides(req: GenerateRequest) -> dict:
+    """GenerateRequest -> harness.state.create_initial_state() kwargs.
+
+    req.reference is intentionally NOT forwarded: harness/graph.py's rag_node
+    unconditionally overwrites state["reference"] with its own auto-selected
+    pick every run (see harness/graph.py rag_node), so a user-supplied
+    reference would be silently discarded anyway — a pre-existing harness
+    limitation from Week 1, not something to paper over here.
+    """
+    overrides: dict = {
+        "activity": req.activities[0] if req.activities else "",
+        "threshold": req.threshold,
+        "max_retries": req.max_retries,
+        "hitl_enabled": req.hitl_enabled,
+    }
+    if req.length_min is not None:
+        overrides["length_min"] = req.length_min
+    if req.length_max is not None:
+        overrides["length_max"] = req.length_max
+    if req.charge_min is not None:
+        overrides["charge_min"] = int(req.charge_min)
+    if req.charge_max is not None:
+        overrides["charge_max"] = int(req.charge_max)
+    if req.hydro_min is not None:
+        overrides["hydro_min"] = req.hydro_min
+    if req.hydro_max is not None:
+        overrides["hydro_max"] = req.hydro_max
+    return overrides
+
+
 @app.post("/generate")
-async def generate_endpoint(req: GenerateRequest):
+async def generate_endpoint(req: GenerateRequest, harness: bool = Query(False)):
+    if harness:
+        from harness.sse_bridge import generate_harness_stream
+
+        return EventSourceResponse(generate_harness_stream(_harness_task_overrides(req)))
     return EventSourceResponse(_generate_stream(req))
+
+
+@app.post("/resume")
+async def resume_endpoint(req: ResumeRequest):
+    """Resume a harness=true generation paused for HITL approval (Week 4 task 3).
+    No-op (returns resumed: false) if nothing is currently paused on this
+    thread_id — e.g. it already completed, or harness/hitl was never enabled.
+    """
+    from harness.sse_bridge import push_hitl_decision
+
+    resumed = push_hitl_decision(req.thread_id, req.decision)
+    return JSONResponse({"resumed": resumed})
 
 
 # ── Health endpoint ──────────────────────────────────────────────────────────
