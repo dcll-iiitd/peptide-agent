@@ -26,6 +26,7 @@ from harness.tools import (
     descriptor_tool,
     diagnostic_tool,
     dssp_tool,
+    edit_operator_tool,
     esmfold_tool,
     peptide_bleu_tool,
     rag_retrieval_tool,
@@ -133,6 +134,7 @@ def score_node(state: AgentState) -> dict:
 
     return {
         "current_score": result.get("score", 0.0),
+        "current_components": result.get("components", {}),
         "current_descriptors": descriptors,
         "status": "validating",
     }
@@ -385,26 +387,56 @@ def _apply_targeted_edit(sequence: str, diagnostic, task: dict):
     return (edited if edited else sequence), op
 
 
+def _fallback_positional_edit(state: AgentState, task: dict, diagnostic):
+    """Week 2's deterministic positional editor. Used when edit_operator_tool's
+    LLM call fails, returns unparseable output, or gets rejected by
+    apply_edit()'s validation — so a flaky LLM never stalls the loop.
+    """
+    if diagnostic and diagnostic.violations:
+        return _apply_targeted_edit(state["current_sequence"], diagnostic, task)
+
+    from backend.tools.sequence_editor import deterministic_edit
+
+    edited = deterministic_edit(state["current_sequence"], task)
+    edit_op = EditOperation(
+        operation="deterministic_edit", position=0, from_aa="", to_aa="",
+        reason="no violations recorded — generic length/charge/hydro fix",
+        component="rulebook",
+    )
+    return (edited if edited else state["current_sequence"]), edit_op
+
+
 def edit_node(state: AgentState) -> dict:
     task = _build_task(state)
     diagnostic = state["current_diagnostic"]
+    violations = diagnostic.violations if diagnostic else []
 
-    if diagnostic and diagnostic.violations:
-        edited, edit_op = _apply_targeted_edit(state["current_sequence"], diagnostic, task)
+    result = edit_operator_tool.invoke(
+        {
+            "sequence": state["current_sequence"],
+            "task": task,
+            "scores": state["current_components"],
+            "violations": violations,
+            "edit_history": state["edit_history"],
+            "changed_positions": state["changed_positions"],
+        }
+    )
+
+    if result.get("valid") and result.get("operation"):
+        edited = result["new_sequence"]
+        edit_op = EditOperation(**result["operation"])
     else:
-        from backend.tools.sequence_editor import deterministic_edit
+        edited, edit_op = _fallback_positional_edit(state, task, diagnostic)
 
-        edited = deterministic_edit(state["current_sequence"], task)
-        edit_op = EditOperation(
-            operation="deterministic_edit", position=0, from_aa="", to_aa="",
-            reason="no violations recorded — generic length/charge/hydro fix",
-            component="rulebook",
-        )
+    changed_positions = state["changed_positions"]
+    if edit_op.position:
+        changed_positions = changed_positions + [edit_op.position]
 
     return {
         "current_sequence": edited if edited else state["current_sequence"],
         "last_edit_op": edit_op,
         "edit_history": state["edit_history"] + [edit_op],
+        "changed_positions": changed_positions,
         "status": "editing",
     }
 

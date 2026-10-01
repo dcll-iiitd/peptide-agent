@@ -176,7 +176,12 @@ def novelty_tool(sequence: str) -> dict:
 
 @tool
 def edit_operator_tool(
-    sequence: str, task: dict, scores: dict | None = None, violations: list | None = None
+    sequence: str,
+    task: dict,
+    scores: dict | None = None,
+    violations: list | None = None,
+    edit_history: list | None = None,
+    changed_positions: list | None = None,
 ) -> dict:
     """Ask the LLM for ONE structured edit instruction and apply it deterministically.
 
@@ -186,6 +191,10 @@ def edit_operator_tool(
     an invalid edit (wrong from_aa, out-of-range position) is structurally
     impossible to actually apply — it falls back to the unchanged sequence.
 
+    edit_history/changed_positions are optional context so the LLM avoids
+    repeating the same edit or the same position when previous edits
+    haven't moved the score.
+
     Returns {operation: dict|None, new_sequence: str, valid: bool,
     reason_rejected: str|None}.
     """
@@ -194,7 +203,9 @@ def edit_operator_tool(
 
         from harness.edit_operator import apply_edit, generate_edit_operation
 
-        op = generate_edit_operation(sequence, task, scores, violations)
+        op = generate_edit_operation(
+            sequence, task, scores, violations, edit_history, changed_positions
+        )
         if op is None:
             return {
                 "operation": None,

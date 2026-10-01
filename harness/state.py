@@ -71,6 +71,7 @@ class AgentState(TypedDict):
     iteration: int
     current_sequence: str
     current_score: float
+    current_components: dict  # PeptideBLEU per-component breakdown (Week 3 edit_operator_tool needs this)
     current_descriptors: Optional[PeptideDescriptors]
     current_diagnostic: Optional[DiagnosticResult]
 
@@ -129,6 +130,7 @@ def create_initial_state(**overrides) -> AgentState:
         "iteration": 0,
         "current_sequence": "",
         "current_score": 0.0,
+        "current_components": {},
         "current_descriptors": None,
         "current_diagnostic": None,
         "rag_examples": [],

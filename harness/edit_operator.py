@@ -82,6 +82,8 @@ def build_edit_operator_prompt(
     task: dict,
     scores: dict | None = None,
     violations: list | None = None,
+    edit_history: list | None = None,
+    changed_positions: list | None = None,
 ) -> str:
     lines = [
         "Current peptide sequence, residues labeled with 1-indexed positions:",
@@ -99,6 +101,21 @@ def build_edit_operator_prompt(
         for v in violations:
             positions = v.get("positions") or []
             lines.append(f"- {v['rule']}: {v.get('fix', '')} - positions {positions}")
+        lines.append("")
+
+    if edit_history:
+        last = edit_history[-1]
+        lines.append(
+            f"Last edit already tried: {last.operation} position {last.position} "
+            f"{last.from_aa}->{last.to_aa} ({last.component}). Do not repeat this exact edit."
+        )
+        lines.append("")
+
+    if changed_positions:
+        recent = sorted(set(changed_positions))[-5:]
+        lines.append(
+            f"Positions edited recently (prefer a different position if stuck): {recent}"
+        )
         lines.append("")
 
     lines.extend(
@@ -159,6 +176,8 @@ def generate_edit_operation(
     task: dict,
     scores: dict | None = None,
     violations: list | None = None,
+    edit_history: list | None = None,
+    changed_positions: list | None = None,
 ):
     """Ask the LLM for ONE structured edit instruction.
 
@@ -168,7 +187,9 @@ def generate_edit_operation(
     from backend import models
     from harness.state import EditOperation
 
-    prompt = build_edit_operator_prompt(sequence, task, scores, violations)
+    prompt = build_edit_operator_prompt(
+        sequence, task, scores, violations, edit_history, changed_positions
+    )
     # Reasoning models spend a substantial chunk of the budget on the
     # <think> block itself before ever reaching the JSON answer — a tight
     # budget risks truncating mid-thought with no JSON produced at all
