@@ -201,12 +201,31 @@ def track_best_node(state: AgentState) -> dict:
     if passed and (best_passing is None or candidate.bleu_score > best_passing.bleu_score):
         best_passing = candidate
 
+    # Which edit operation types actually move the score — only meaningful
+    # once an edit has happened (iteration 1's initial generate has no
+    # last_edit_op). New dict objects throughout rather than mutating
+    # state["edit_stats"] in place, since LangGraph node returns are deltas,
+    # not in-place state mutations.
+    edit_stats = {k: dict(v) for k, v in state["edit_stats"].items()}
+    last_edit_op = state["last_edit_op"]
+    if last_edit_op:
+        op_type = last_edit_op.operation
+        delta = candidate.bleu_score - state["prev_score"]
+        stats = dict(edit_stats.get(op_type, {"count": 0, "improvements": 0, "avg_delta": 0.0}))
+        stats["count"] += 1
+        if delta > 0:
+            stats["improvements"] += 1
+        stats["avg_delta"] = (stats["avg_delta"] * (stats["count"] - 1) + delta) / stats["count"]
+        edit_stats[op_type] = stats
+
     return {
         "candidates": candidates,
         "iteration": iteration,
         "best_overall": best_overall,
         "best_passing": best_passing,
         "consecutive_stuck": consecutive_stuck,
+        "edit_stats": edit_stats,
+        "prev_score": candidate.bleu_score,
         # Only genuine success (a passing candidate) sets early_stop here —
         # the iteration>=max_retries cap is enforced separately by
         # route_after_track, not folded into this flag.

@@ -93,6 +93,12 @@ class AgentState(TypedDict):
     # updates — using list[int] instead per state_schema.md's
     # implementation note.
     changed_positions: list
+    # {operation_type: {count, improvements, avg_delta}} — which edit
+    # operations actually improve the score (Week 3 task 5).
+    edit_stats: dict
+    # current_score as of the previous lap, so track_best_node can compute
+    # this lap's score delta for edit_stats.
+    prev_score: float
 
     # Post-hoc
     plddt_score: Optional[float]
@@ -143,6 +149,8 @@ def create_initial_state(**overrides) -> AgentState:
         "edit_history": [],
         "consecutive_stuck": 0,
         "changed_positions": [],
+        "edit_stats": {},
+        "prev_score": 0.0,
         "plddt_score": None,
         "helix_pct": None,
         "novelty_score": None,
