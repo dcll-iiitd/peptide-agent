@@ -208,9 +208,8 @@ async def generate_harness_stream(task_overrides: dict, thread_id: Optional[str]
             # just to check for it a few lines down.
             loop.call_soon_threadsafe(event_queue.put_nowait, _DONE)
 
-    result_holder: list[dict] = []
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    loop.run_in_executor(executor, lambda: result_holder.append(run_graph()))
+    future = loop.run_in_executor(executor, run_graph)
 
     while True:
         event = await event_queue.get()
@@ -218,5 +217,23 @@ async def generate_harness_stream(task_overrides: dict, thread_id: Optional[str]
             break
         yield event
 
-    if result_holder:
-        yield {"data": json.dumps(result_holder[0])}
+    # Previously this discarded run_graph()'s outcome via a plain
+    # result_holder list appended from inside the executor thread — any
+    # exception there (e.g. a bug in a node) vanished silently, since
+    # nothing ever awaited/inspected the Future run_in_executor returns.
+    # That exact gap hid a real bug during Week 4 testing: the SSE stream
+    # just quietly ended after the last "attempt" event, no "final", no
+    # error, nothing in the server log. Awaiting the future surfaces it.
+    try:
+        result = await future
+    except Exception as e:
+        import traceback
+
+        yield {
+            "data": json.dumps(
+                {"type": "error", "message": str(e), "traceback": traceback.format_exc()}
+            )
+        }
+        return
+
+    yield {"data": json.dumps(result)}
