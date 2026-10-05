@@ -23,12 +23,124 @@ let activeActivities = new Set();
 let customMode = false;   // true = free-text prompt mode
 let currentPdb = null;    // raw PDB text for the last successful structure prediction
 let structureViewer = null;
+let currentHitlThreadId = null;  // thread_id of the generation currently paused for approval
+let commandThreadId = null;      // stable thread_id reused across /command calls this session
 
 /* ── Init ────────────────────────────────────────────────────────────────── */
 function init() {
-  buildActivityGrid();
-  updatePreview();
+  // buildActivityGrid()/updatePreview() targeted the old structured-form
+  // markup (#activityGrid, #promptPreview), which Phase 3's new shell
+  // doesn't have — that markup returns in Phase 4's generation workspace,
+  // at which point these calls (and the functions below) get reconnected.
+  // Calling them now against the new DOM would throw on a null element.
+  renderExperimentsList();
   checkHealth();
+  handleSidebarResize();
+  window.addEventListener('resize', handleSidebarResize);
+}
+
+/* ── Router + sidebar (Phase 3) ───────────────────────────────────────────── */
+const VIEWS = ['generate', 'analyze', 'compare', 'score', 'history'];
+
+function navigateTo(view) {
+  if (!VIEWS.includes(view)) view = 'generate';
+  document.querySelectorAll('.nav-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.view === view);
+  });
+  document.querySelectorAll('.view').forEach(el => {
+    el.classList.toggle('active', el.dataset.view === view);
+  });
+  if (window.innerWidth <= 768) {
+    document.getElementById('sidebar').classList.remove('drawer-open');
+  }
+}
+
+function newExperiment() {
+  navigateTo('generate');
+  // Phase 4 resets the generation form/chat state here.
+}
+
+function toggleSidebarCollapse() {
+  const sidebar = document.getElementById('sidebar');
+  if (window.innerWidth <= 768) {
+    sidebar.classList.toggle('drawer-open');
+  } else {
+    sidebar.classList.toggle('collapsed');
+  }
+}
+
+// Basic, non-polished responsive behavior per frontend_phase2_decisions.md
+// scope note ("Full responsive mobile" deferred, desktop-first for demo):
+// auto-collapse to the icon rail at tablet widths, auto-expand on desktop.
+// A user's manual toggle (above) can override this until the next resize.
+function handleSidebarResize() {
+  const sidebar = document.getElementById('sidebar');
+  const w = window.innerWidth;
+  if (w <= 768) {
+    sidebar.classList.remove('collapsed');
+  } else if (w <= 1200) {
+    sidebar.classList.add('collapsed');
+  } else {
+    sidebar.classList.remove('collapsed');
+  }
+}
+
+/* ── Templates (Phase 3 stub) ─────────────────────────────────────────────
+   Phase 4 wires these into the real generation form/chat. For now, just
+   navigates to the Generate placeholder and names the selected template so
+   the interaction model is demonstrable before the form exists. */
+const TEMPLATE_LABELS = {
+  amp: 'Antimicrobial (AMP)',
+  cpp: 'Cell-Penetrating (CPP)',
+  antifungal: 'Antifungal',
+  antiviral: 'Antiviral',
+  immunological: 'Immunological',
+  custom: 'Custom',
+};
+
+function applyTemplate(name) {
+  navigateTo('generate');
+  const el = document.querySelector('.view-placeholder-template');
+  if (el) {
+    el.textContent = `Selected template: ${TEMPLATE_LABELS[name] || name} — the generation form arrives in Phase 4.`;
+  }
+}
+
+/* ── Recent experiments (frontend_phase2_decisions.md Decision 3) ─────────
+   Phase 3 only reads/renders this list. Decision 3's write side ("In app.js
+   renderResult(): store thread_id/sequence/score/activity/timestamp/status
+   to localStorage, max 20 entries") belongs to whichever phase rebuilds
+   renderResult() against real result markup (Phase 5) — writing here now
+   would have nothing calling it yet. */
+const EXPERIMENTS_KEY = 'pepforge_experiments';
+
+function loadExperiments() {
+  try {
+    return JSON.parse(localStorage.getItem(EXPERIMENTS_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+function renderExperimentsList() {
+  const list = document.getElementById('experimentsList');
+  const experiments = loadExperiments();
+  if (experiments.length === 0) {
+    list.innerHTML = '<div class="experiments-empty">No experiments yet</div>';
+    return;
+  }
+  list.innerHTML = experiments.slice().reverse().map(exp => `
+    <div class="experiment-item" onclick="loadExperiment('${exp.thread_id}')">
+      <span class="experiment-seq">${exp.sequence || '(no sequence)'}</span>
+      <span class="experiment-meta">${exp.activity || ''} · ${new Date(exp.timestamp).toLocaleString()}</span>
+    </div>
+  `).join('');
+}
+
+function loadExperiment(threadId) {
+  // Phase 5 loads the full stored result for this thread_id into the
+  // result view. For now just surfaces the History placeholder.
+  navigateTo('history');
 }
 
 function buildActivityGrid() {
@@ -49,6 +161,13 @@ function toggleActivity(act, checked) {
   const chip = document.querySelector(`.activity-chip[data-act="${act}"]`);
   if (chip) chip.classList.toggle('active', checked);
   updatePreview();
+}
+
+/* ── Harness toggle (Week 4 task 5) ──────────────────────────────────────── */
+function onHarnessToggle() {
+  const useHarness = document.getElementById('harnessToggle').checked;
+  document.getElementById('hitlToggleWrap').style.display = useHarness ? 'flex' : 'none';
+  if (!useHarness) document.getElementById('hitlToggle').checked = false;
 }
 
 /* ── Custom prompt mode toggle ───────────────────────────────────────────── */
@@ -275,12 +394,17 @@ async function generate() {
     };
   }
 
+  const useHarness = document.getElementById('harnessToggle').checked;
+  if (useHarness) {
+    body.hitl_enabled = document.getElementById('hitlToggle').checked;
+  }
+
   resetResults();
   setGenerating(true);
   clearTrace();
 
   try {
-    const response = await fetch(`${API_BASE}/generate`, {
+    const response = await fetch(`${API_BASE}/generate${useHarness ? '?harness=true' : ''}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -317,8 +441,134 @@ async function generate() {
 function handleEvent(evt) {
   if (evt.type === 'attempt') {
     addTraceRow(evt);
+    renderViolations(evt.violations);
+  } else if (evt.type === 'hitl') {
+    showHitlPanel(evt.data);
   } else if (evt.type === 'final') {
+    hideHitlPanel();
     renderResult(evt.result);
+  } else if (evt.type === 'error') {
+    addTraceRow({ n: '!', sequence: '', score: null, passed: false });
+    console.error('harness error:', evt.message, evt.traceback);
+  }
+}
+
+/* ── HITL approval panel (Week 4 task 5) ─────────────────────────────────── */
+function showHitlPanel(data) {
+  currentHitlThreadId = data.thread_id;
+  document.getElementById('hitlSequence').textContent = data.sequence || '';
+  const rb = data.rulebook;
+  const scoreStr = data.score != null ? data.score.toFixed(4) : '–';
+  const rbStr = rb ? `${rb.passed ? 'PASS' : 'FAIL'} (${rb.n_violations} violation(s))` : '–';
+  document.getElementById('hitlMeta').textContent =
+    `Iteration ${data.iteration} · Score ${scoreStr} · Rulebook ${rbStr}`;
+  document.getElementById('hitlModifyRow').style.display = 'none';
+  document.getElementById('hitlModifySequence').value = '';
+  document.getElementById('hitlPanel').style.display = 'block';
+}
+
+function hideHitlPanel() {
+  document.getElementById('hitlPanel').style.display = 'none';
+  currentHitlThreadId = null;
+}
+
+function hitlShowModify() {
+  document.getElementById('hitlModifyRow').style.display = 'flex';
+}
+
+async function hitlDecide(action) {
+  if (!currentHitlThreadId) return;
+  const decision = { action };
+  if (action === 'modify') {
+    const seq = document.getElementById('hitlModifySequence').value.trim().toUpperCase();
+    if (!seq) { alert('Enter a replacement sequence first.'); return; }
+    decision.sequence = seq;
+  }
+
+  const threadId = currentHitlThreadId;
+  document.getElementById('hitlPanel').style.display = 'none';
+  // The paused /generate request stays open on its own connection — resuming
+  // just unblocks it server-side, after which the same stream keeps yielding
+  // attempt/hitl/final events with no further action needed here.
+  try {
+    await fetch(`${API_BASE}/resume`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ thread_id: threadId, decision }),
+    });
+  } catch (err) {
+    console.error('resume failed:', err);
+  }
+}
+
+/* ── Diagnostic violations (Week 4 task 5, harness mode only) ────────────── */
+function renderViolations(violations) {
+  const card = document.getElementById('violationsCard');
+  const list = document.getElementById('violationsList');
+  if (!violations || violations.length === 0) {
+    card.style.display = 'none';
+    list.innerHTML = '';
+    return;
+  }
+  list.innerHTML = violations.map(v => `
+    <div class="violation-row">
+      <span class="violation-rule">${v.rule}</span>
+      <span class="violation-detail">current: ${v.current} → target: ${v.target}</span>
+      <span class="violation-fix">${v.fix}</span>
+    </div>
+  `).join('');
+  card.style.display = 'block';
+}
+
+/* ── Edit statistics (Week 4 task 5, harness mode only) ──────────────────── */
+function renderEditStats(stats) {
+  const card = document.getElementById('editStatsCard');
+  const list = document.getElementById('editStatsList');
+  list.innerHTML = '';
+  if (!stats || Object.keys(stats).length === 0) {
+    card.style.display = 'none';
+    return;
+  }
+  Object.entries(stats).forEach(([op, s]) => {
+    const deltaStr = s.avg_delta >= 0 ? `+${s.avg_delta.toFixed(4)}` : s.avg_delta.toFixed(4);
+    const row = document.createElement('div');
+    row.className = 'comp-row';
+    row.innerHTML = `
+      <span class="comp-label">${op}</span>
+      <span class="comp-val" style="width:auto">${s.count} used · ${s.improvements} improved · avg Δ ${deltaStr}</span>
+    `;
+    list.appendChild(row);
+  });
+  card.style.display = 'block';
+}
+
+/* ── LangSmith trace link (Week 4 task 5) ─────────────────────────────────── */
+function renderTraceLink(url) {
+  const link = document.getElementById('traceLink');
+  if (!url) { link.style.display = 'none'; return; }
+  link.href = url;
+  link.style.display = 'inline-block';
+}
+
+/* ── Slash commands (Week 4 task 5) ──────────────────────────────────────── */
+async function runCommand() {
+  const input = document.getElementById('commandInput');
+  const text = input.value.trim();
+  if (!text) return;
+  if (!commandThreadId) commandThreadId = crypto.randomUUID();
+
+  const out = document.getElementById('commandOutput');
+  out.textContent = 'Running…';
+  try {
+    const r = await fetch(`${API_BASE}/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, thread_id: commandThreadId }),
+    });
+    const data = await r.json();
+    out.textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    out.textContent = `Error: ${err}`;
   }
 }
 
@@ -341,6 +591,10 @@ function resetResults() {
   structureViewer = null;
   document.getElementById('structureViewer').innerHTML = '';
   document.getElementById('graphCard').style.display = 'none';
+  document.getElementById('violationsCard').style.display = 'none';
+  document.getElementById('editStatsCard').style.display = 'none';
+  document.getElementById('traceLink').style.display = 'none';
+  hideHitlPanel();
   // ── Structural graph analysis UI (temporarily disabled) ──
   // document.getElementById('protein-graph-container').style.display = 'none';
 }
@@ -446,6 +700,8 @@ function renderResult(result) {
   renderGraphFeatures(result.graph_features);
   renderDssp(result.secondary_structure);
   renderNovelty(result.blast_similarity);
+  renderEditStats(result.edit_stats);
+  renderTraceLink(result.trace_url);
 
   if (result.components && Object.keys(result.components).length > 0) {
     renderComponents(result.components, result.plddt_score, result.secondary_structure?.helix_pct);

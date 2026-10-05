@@ -11,296 +11,143 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
 </head>
 <body>
-  <!-- SIDEBAR -->
-  <aside class="sidebar">
-    <div class="sidebar-logo">
-      <div class="logo-icon">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#00bcd4" stroke-width="2">
-          <path d="M2 12h4M18 12h4M12 2v4M12 18v4"/>
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
-        </svg>
-      </div>
-      <div class="logo-text">
-        <span class="logo-name">Pep</span>
-        <span class="logo-sub">Forge</span>
-      </div>
-    </div>
-
-    <div class="sidebar-section">
-      <div class="section-label">NEW</div>
-      <button class="preset-btn preset-custom" onclick="toggleCustomMode()">
-        <span class="preset-icon">✍️</span>
-        <div class="preset-info">
-          <div class="preset-name" id="customBtnLabel">Custom Prompt</div>
-          <div class="preset-desc">Write your own specification from scratch</div>
+  <div class="app-shell" id="appShell">
+    <!-- SIDEBAR -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" onclick="toggleSidebarCollapse()" aria-label="Collapse sidebar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 12h18M3 6h18M3 18h18"/>
+          </svg>
+        </button>
+        <div class="sidebar-logo">
+          <div class="logo-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#00e5c3" stroke-width="2">
+              <path d="M2 12h4M18 12h4M12 2v4M12 18v4"/>
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+            </svg>
+          </div>
+          <div class="logo-text">
+            <span class="logo-name">PepForge</span>
+            <span class="logo-sub">AI Peptide Research</span>
+          </div>
         </div>
+      </div>
+
+      <button class="btn-new-experiment" onclick="newExperiment()">
+        <span>+</span><span>New Experiment</span>
       </button>
 
-      <div class="section-label" style="margin-top:12px">QUICK START</div>
-      <button class="preset-btn preset-antimicrobial" onclick="applyPreset('antimicrobial')">
-        <span class="preset-icon">⚡</span>
-        <div class="preset-info">
-          <div class="preset-name">Antimicrobial</div>
-          <div class="preset-desc">AMP: length 15–20, charge +2 to +5</div>
-        </div>
-      </button>
-      <button class="preset-btn preset-cpp" onclick="applyPreset('cpp')">
-        <span class="preset-icon">✏️</span>
-        <div class="preset-info">
-          <div class="preset-name">Cell-Penetrating</div>
-          <div class="preset-desc">CPP: length 12–16, charge +4 to +8</div>
-        </div>
-      </button>
-      <button class="preset-btn preset-clear" onclick="clearForm()">
-        <span class="preset-icon">⊞</span>
-        <div class="preset-info">
-          <div class="preset-name">Clear</div>
-          <div class="preset-desc">Reset form and results</div>
-        </div>
-      </button>
-    </div>
+      <nav class="sidebar-nav">
+        <div class="section-label">WORKFLOWS</div>
+        <button class="nav-item active" data-view="generate" onclick="navigateTo('generate')">
+          <span class="nav-icon">🧬</span><span class="nav-label">Generate</span>
+        </button>
+        <button class="nav-item" data-view="analyze" onclick="navigateTo('analyze')">
+          <span class="nav-icon">🔬</span><span class="nav-label">Analyze</span>
+        </button>
+        <button class="nav-item" data-view="compare" onclick="navigateTo('compare')">
+          <span class="nav-icon">🧪</span><span class="nav-label">Compare</span>
+        </button>
+        <button class="nav-item" data-view="score" onclick="navigateTo('score')">
+          <span class="nav-icon">📊</span><span class="nav-label">Score</span>
+        </button>
+        <button class="nav-item" data-view="history" onclick="navigateTo('history')">
+          <span class="nav-icon">🕘</span><span class="nav-label">History</span>
+        </button>
+      </nav>
 
-    <div class="sidebar-footer">
-      <div class="footer-row">
-        <span class="footer-label">Model:</span>
-        <span class="footer-value">OpenBioLLM-70B</span>
+      <div class="sidebar-section">
+        <div class="section-label">TEMPLATES</div>
+        <button class="template-btn" onclick="applyTemplate('amp')">
+          <span class="nav-icon">⚡</span><span class="nav-label">Antimicrobial (AMP)</span>
+        </button>
+        <button class="template-btn" onclick="applyTemplate('cpp')">
+          <span class="nav-icon">🧬</span><span class="nav-label">Cell-Penetrating (CPP)</span>
+        </button>
+        <button class="template-btn" onclick="applyTemplate('antifungal')">
+          <span class="nav-icon">🦠</span><span class="nav-label">Antifungal</span>
+        </button>
+        <button class="template-btn" onclick="applyTemplate('antiviral')">
+          <span class="nav-icon">🛡</span><span class="nav-label">Antiviral</span>
+        </button>
+        <button class="template-btn" onclick="applyTemplate('immunological')">
+          <span class="nav-icon">🧫</span><span class="nav-label">Immunological</span>
+        </button>
+        <button class="template-btn" onclick="applyTemplate('custom')">
+          <span class="nav-icon">✍</span><span class="nav-label">Custom</span>
+        </button>
       </div>
-      <div class="footer-row">
-        <span class="footer-label">Provider:</span>
-        <span class="footer-value">Bhaskera GPU Server</span>
+
+      <div class="sidebar-section sidebar-experiments">
+        <div class="section-label">RECENT EXPERIMENTS</div>
+        <div class="experiments-list" id="experimentsList">
+          <div class="experiments-empty">No experiments yet</div>
+        </div>
       </div>
-      <div class="footer-row">
-        <span class="footer-label">Status:</span>
-        <span class="status-dot" id="statusDot"></span>
-        <span class="footer-value" id="statusText">Ready</span>
+
+      <div class="sidebar-footer">
+        <div class="footer-row">
+          <span class="footer-label">Model:</span>
+          <span class="footer-value">OpenBioLLM-70B</span>
+        </div>
+        <div class="footer-row">
+          <span class="footer-label">Provider:</span>
+          <span class="footer-value">Bhaskera GPU Server</span>
+        </div>
+        <div class="footer-row">
+          <span class="footer-label">Status:</span>
+          <span class="status-dot" id="statusDot"></span>
+          <span class="footer-value" id="statusText">Ready</span>
+        </div>
       </div>
-    </div>
-  </aside>
+    </aside>
 
-  <!-- MAIN CONTENT -->
-  <main class="main-content">
-    <header class="main-header">
-      <h1>Hey! Researcher 👋</h1>
-      <p>Generate novel peptide sequences with the OpenBioLLM agent</p>
-    </header>
-
-    <div class="panels">
-      <!-- LEFT PANEL: SPECIFICATION -->
-      <section class="panel panel-left">
-        <div class="panel-header">
-          <span class="panel-icon">📋</span>
-          <span class="panel-title">PEPTIDE SPECIFICATION</span>
-          <span class="mode-badge" id="modeBadge">STRUCTURED</span>
-        </div>
-
-        <!-- Prompt preview / custom textarea -->
-        <div class="prompt-preview-wrapper">
-          <textarea id="promptPreview" class="prompt-preview" readonly spellcheck="false"
-            placeholder="Fill in the fields below — prompt preview will appear here"></textarea>
-          <div class="custom-hint" id="customHint" style="display:none">
-            Type your peptide specification above. The agent will use this as the first-attempt prompt
-            and apply automatic feedback on subsequent retries.
-          </div>
-        </div>
-
-        <!-- STRUCTURED FORM (hidden in custom mode) -->
-        <div id="structuredForm">
-          <div class="panel-section-label">
-            <span class="panel-icon">⚙️</span>
-            TARGET PROPERTIES (specify ranges)
-          </div>
-
-          <div class="props-grid">
-            <div class="prop-field range-field">
-              <label>Length (residues)</label>
-              <div class="range-row">
-                <input type="number" id="inputLenMin" value="15" min="2" max="200" placeholder="min" oninput="updatePreview()" />
-                <span class="range-sep">to</span>
-                <input type="number" id="inputLenMax" value="20" min="2" max="200" placeholder="max" oninput="updatePreview()" />
-              </div>
-            </div>
-            <div class="prop-field range-field">
-              <label>Net charge at pH 7</label>
-              <div class="range-row">
-                <input type="number" id="inputChargeMin" value="2" step="1" placeholder="min" oninput="updatePreview()" />
-                <span class="range-sep">to</span>
-                <input type="number" id="inputChargeMax" value="5" step="1" placeholder="max" oninput="updatePreview()" />
-              </div>
-            </div>
-            <div class="prop-field range-field">
-              <label>Hydrophobic fraction (%)</label>
-              <div class="range-row">
-                <input type="number" id="inputHydroMin" value="35" min="0" max="100" placeholder="min%" oninput="updatePreview()" />
-                <span class="range-sep">to</span>
-                <input type="number" id="inputHydroMax" value="55" min="0" max="100" placeholder="max%" oninput="updatePreview()" />
-              </div>
-            </div>
-            <div class="prop-field">
-              <label>Max Retries</label>
-              <input type="number" id="inputRetries" value="6" min="1" max="10" />
-            </div>
-          </div>
-
-          <div class="panel-section-label" style="margin-top:12px">
-            <span class="panel-icon">🏷️</span>
-            ACTIVITY FLAGS
-          </div>
-          <div class="activity-grid" id="activityGrid"></div>
-
-          <div class="ref-field">
-            <label>Reference Sequence <span class="optional">(optional — auto-selected from activity if blank)</span></label>
-            <input type="text" id="inputRef" placeholder="e.g. KLLKLLKLLK  (leave blank to use canonical default)" oninput="updatePreview()" class="ref-input" />
-          </div>
-        </div>
-
-        <!-- CUSTOM MODE: just retries field -->
-        <div id="customControls" style="display:none">
-          <div class="panel-section-label" style="margin-top:8px">
-            <span class="panel-icon">⚙️</span>
-            RETRIES
-          </div>
-          <div class="props-grid" style="grid-template-columns:1fr">
-            <div class="prop-field">
-              <label>Max Retries</label>
-              <input type="number" id="inputRetriesCustom" value="6" min="1" max="10" />
-            </div>
-          </div>
-        </div>
-
-        <div class="action-buttons">
-          <button class="btn-generate" id="btnGenerate" onclick="generate()">
-            ✨ GENERATE
-          </button>
-          <button class="btn-clear" onclick="clearForm()">CLEAR</button>
+    <!-- MAIN WORKSPACE (router-driven, one view visible at a time) -->
+    <main class="main-workspace" id="mainWorkspace">
+      <section class="view active" data-view="generate" id="view-generate">
+        <div class="view-placeholder" id="generateViewPlaceholder">
+          <h2>🧬 Generate</h2>
+          <p>The generation workspace (chat input, parsed specification,
+            agent progress, best candidate) arrives in Phase 4.</p>
+          <p class="view-placeholder-template"></p>
         </div>
       </section>
 
-      <!-- RIGHT PANEL: RESULTS -->
-      <section class="panel panel-right">
-        <div class="panel-header">
-          <span class="panel-icon">📊</span>
-          <span class="panel-title">RESULTS</span>
-        </div>
-
-        <!-- Agent Response -->
-        <div class="result-card" id="responseCard">
-          <div class="result-card-header">
-            <span class="result-icon">🤖</span>
-            AGENT RESPONSE
-          </div>
-          <div class="result-sequence" id="resultSequence">ASSISTANT</div>
-        </div>
-
-        <!-- Metrics bar -->
-        <div class="metrics-bar">
-          <div class="metric-badge metric-bleu" id="metricBleu">
-            <span class="metric-label">PeptideBLEU</span>
-            <span class="metric-value" id="bleuValue">0.0000</span>
-          </div>
-          <div class="metric-badge metric-rulebook" id="metricRulebook">
-            <span class="metric-label">Rulebook</span>
-            <span class="metric-value" id="rbScoreValue">0.0000</span>
-          </div>
-          <div class="metric-badge" id="metricPlddt" style="display:none">
-            <span class="metric-label">pLDDT (ESMFold)</span>
-            <span class="metric-value" id="plddtValue">–</span>
-          </div>
-          <div class="metric-badge" id="metricNovelty" style="display:none">
-            <span class="metric-label">Novelty</span>
-            <span class="metric-value" id="noveltyValue">–</span>
-          </div>
-          <div class="metric-badge" id="metricIter">
-            <span class="metric-label">Iterations</span>
-            <span class="metric-value" id="iterValue">–</span>
-          </div>
-          <div class="metric-badge" id="metricTime">
-            <span class="metric-label">Time</span>
-            <span class="metric-value" id="timeValue">–</span>
-          </div>
-        </div>
-        <div class="ref-note" id="refNote"></div>
-
-        <!-- Execution Trace -->
-        <div class="result-card">
-          <div class="result-card-header">
-            <span class="result-icon">📋</span>
-            EXECUTION TRACE
-          </div>
-          <div id="traceList" class="trace-list">
-            <div class="trace-empty">Run generation to see trace</div>
-          </div>
-        </div>
-
-        <!-- Component Scores -->
-        <div class="result-card" id="componentCard" style="display:none">
-          <div class="result-card-header">
-            <span class="result-icon">📈</span>
-            COMPONENT SCORES
-          </div>
-          <div id="componentScores" class="component-scores"></div>
-        </div>
-
-        <!-- Secondary Structure (DSSP) -->
-        <div class="result-card" id="dsspCard" style="display:none">
-          <div class="result-card-header">
-            <span class="result-icon">🌀</span>
-            SECONDARY STRUCTURE (DSSP)
-          </div>
-          <div class="ss-string" id="dsspSsString"></div>
-          <div id="dsspBars" class="component-scores"></div>
-          <div id="dsspSimilarity" class="component-scores"></div>
-          <div class="graph-interp" id="dsspInterp"></div>
-        </div>
-
-        <!-- Novelty Assessment (BLAST) -->
-        <div class="result-card" id="noveltyCard" style="display:none">
-          <div class="result-card-header">
-            <span class="result-icon">🔎</span>
-            NOVELTY ASSESSMENT (BLAST)
-          </div>
-          <div id="noveltyBars" class="component-scores"></div>
-          <div class="graph-interp" id="noveltyInterp"></div>
-        </div>
-
-        <!-- 3D Structure (ESMFold) -->
-        <div class="result-card" id="structureCard" style="display:none">
-          <div class="result-card-header">
-            <span class="result-icon">🧬</span>
-            3D STRUCTURE (ESMFold)
-            <button class="pdb-download-btn" id="btnDownloadPdb" onclick="downloadPdb()">⬇ Download PDB</button>
-          </div>
-          <div id="structureViewer" class="structure-viewer"></div>
-        </div>
-
-        <!-- Structural Graph Analysis -->
-        <div class="result-card" id="graphCard" style="display:none">
-          <div class="result-card-header">
-            <span class="result-icon">🕸️</span>
-            STRUCTURAL GRAPH ANALYSIS
-          </div>
-          <div class="graph-score-row">
-            <span class="graph-score-label">Structure Score</span>
-            <div class="comp-bar-bg"><div class="comp-bar-fill" id="graphScoreBar" style="width:0%"></div></div>
-            <span class="graph-score-val" id="graphScoreVal">–</span>
-          </div>
-          <div id="graphCounts" class="graph-counts"></div>
-          <div class="graph-interp" id="graphInterp"></div>
-          <!-- ── Structural graph analysis UI (temporarily disabled) ──
-          <div id="protein-graph-container" style="display:none;">
-            <div class="graph-legend">
-              <span class="legend-item hbond">── H-bond</span>
-              <span class="legend-item ionic">── Ionic</span>
-              <span class="legend-item pipi">── Pi-Pi</span>
-              <span class="legend-item hydro">── Hydrophobic</span>
-            </div>
-            <svg id="protein-graph" width="100%" height="320"></svg>
-          </div>
-          -->
+      <section class="view" data-view="analyze" id="view-analyze">
+        <div class="view-placeholder">
+          <h2>🔬 Analyze</h2>
+          <p>Sequence analysis workflow — deferred post-paper per
+            frontend_phase2_decisions.md.</p>
         </div>
       </section>
-    </div>
-  </main>
+
+      <section class="view" data-view="compare" id="view-compare">
+        <div class="view-placeholder">
+          <h2>🧪 Compare</h2>
+          <p>Candidate comparison workflow — deferred post-paper per
+            frontend_phase2_decisions.md.</p>
+        </div>
+      </section>
+
+      <section class="view" data-view="score" id="view-score">
+        <div class="view-placeholder">
+          <h2>📊 Score</h2>
+          <p>Sequence scoring workflow arrives alongside the result cards
+            in Phase 5.</p>
+        </div>
+      </section>
+
+      <section class="view" data-view="history" id="view-history">
+        <div class="view-placeholder">
+          <h2>🕘 History</h2>
+          <p>Past experiment detail view arrives in Phase 5, once results
+            are recorded to this session's history.</p>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <script src="app.js"></script>
 </body>
