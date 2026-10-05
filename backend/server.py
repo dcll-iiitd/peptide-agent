@@ -72,6 +72,11 @@ class ResumeRequest(BaseModel):
     thread_id: str
     decision: dict
 
+
+class CommandRequest(BaseModel):
+    text: str
+    thread_id: str = ""
+
 # ── SSE streaming endpoint ───────────────────────────────────────────────────
 
 async def _generate_stream(req: GenerateRequest) -> AsyncIterator[dict]:
@@ -299,6 +304,26 @@ async def resume_endpoint(req: ResumeRequest):
 
     resumed = push_hitl_decision(req.thread_id, req.decision)
     return JSONResponse({"resumed": resumed})
+
+
+@app.post("/command")
+async def command_endpoint(req: CommandRequest):
+    """Slash command endpoint (Week 4 task 5) — frontend/app.js's command bar.
+    Runs execute_command() in the default executor since /generate and
+    /edit sub-commands make real blocking LLM calls; running it directly on
+    the event loop would stall every other concurrent request for as long as
+    that call takes.
+    """
+    import uuid as _uuid
+
+    from harness.commands import execute_command
+
+    thread_id = req.thread_id or str(_uuid.uuid4())
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, execute_command, req.text, thread_id)
+    if result is None:
+        return JSONResponse({"error": f"not a valid command: {req.text!r}"}, status_code=400)
+    return JSONResponse(result)
 
 
 # ── Health endpoint ──────────────────────────────────────────────────────────
