@@ -107,11 +107,137 @@
     <!-- MAIN WORKSPACE (router-driven, one view visible at a time) -->
     <main class="main-workspace" id="mainWorkspace">
       <section class="view active" data-view="generate" id="view-generate">
-        <div class="view-placeholder" id="generateViewPlaceholder">
-          <h2>🧬 Generate</h2>
-          <p>The generation workspace (chat input, parsed specification,
-            agent progress, best candidate) arrives in Phase 4.</p>
-          <p class="view-placeholder-template"></p>
+        <!-- EMPTY STATE: no experiment running yet -->
+        <div class="generate-empty" id="generateEmpty">
+          <div class="generate-empty-inner">
+            <h1 class="generate-title">What peptide do you want to design?</h1>
+
+            <div class="generate-input-wrapper">
+              <textarea id="genInput" class="generate-textarea" rows="3"
+                placeholder="Describe your peptide objective...
+e.g. Generate an antibacterial peptide with 15–20 residues, charge +2 to +5, hydrophobicity 35–55%"
+                oninput="onGenInputChange()"></textarea>
+
+              <div class="command-menu" id="commandMenu" style="display:none"></div>
+
+              <div class="generate-input-actions">
+                <button class="btn-chip" onclick="toggleCommandMenu()">/ Commands</button>
+                <button class="btn-chip" id="advancedToggleBtn" onclick="toggleAdvancedPanel()">Advanced ▾</button>
+                <button class="btn-generate-main" id="btnGenerateMain" onclick="startGeneration()">Generate →</button>
+              </div>
+            </div>
+
+            <!-- ADVANCED CONSTRAINTS PANEL (hidden by default) -->
+            <div class="advanced-panel" id="advancedPanel" style="display:none">
+              <div class="advanced-grid">
+                <div class="prop-field range-field">
+                  <label>Length (residues)</label>
+                  <div class="range-row">
+                    <input type="number" id="advLenMin" value="10" min="2" max="200" />
+                    <span class="range-sep">to</span>
+                    <input type="number" id="advLenMax" value="50" min="2" max="200" />
+                  </div>
+                </div>
+                <div class="prop-field range-field">
+                  <label>Net charge</label>
+                  <div class="range-row">
+                    <input type="number" id="advChargeMin" value="2" step="1" />
+                    <span class="range-sep">to</span>
+                    <input type="number" id="advChargeMax" value="5" step="1" />
+                  </div>
+                </div>
+                <div class="prop-field range-field">
+                  <label>Hydrophobicity (%)</label>
+                  <div class="range-row">
+                    <input type="number" id="advHydroMin" value="30" min="0" max="100" />
+                    <span class="range-sep">to</span>
+                    <input type="number" id="advHydroMax" value="50" min="0" max="100" />
+                  </div>
+                </div>
+                <div class="prop-field">
+                  <label>Activity</label>
+                  <select id="advActivity" class="ref-input"></select>
+                </div>
+                <div class="prop-field">
+                  <label>Max retries</label>
+                  <input type="number" id="advMaxRetries" value="6" min="1" max="10" />
+                </div>
+                <div class="prop-field">
+                  <label>Threshold</label>
+                  <input type="number" id="advThreshold" value="0.35" min="0" max="1" step="0.01" />
+                </div>
+              </div>
+
+              <label class="harness-toggle" style="margin-top:12px">
+                <input type="checkbox" id="advHitlEnabled" />
+                <span>Human-in-the-loop approval</span>
+              </label>
+
+              <div class="dev-settings">
+                <div class="section-label">DEVELOPER SETTINGS</div>
+                <label class="harness-toggle">
+                  <input type="checkbox" id="advUseLegacy" />
+                  <span>Use legacy agent (non-harness)</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ACTIVE GENERATION STATE -->
+        <div class="generate-active" id="generateActive" style="display:none">
+          <div class="result-card" id="specCard">
+            <div class="result-card-header">
+              <span class="result-icon">🎯</span> PARSED SPECIFICATION
+              <button class="btn-chip spec-edit-btn" onclick="toggleAdvancedPanel()">Edit</button>
+            </div>
+            <div class="spec-grid" id="specGrid"></div>
+          </div>
+
+          <div class="result-card" id="progressCard">
+            <div class="result-card-header"><span class="result-icon">⚙️</span> AGENT PROGRESS</div>
+            <div class="progress-timeline" id="progressTimeline"></div>
+          </div>
+
+          <!-- HITL approval panel -->
+          <div class="hitl-panel" id="hitlPanel" style="display:none">
+            <div class="hitl-header">⏸ Researcher approval needed</div>
+            <div class="hitl-sequence" id="hitlSequence"></div>
+            <div class="hitl-meta" id="hitlMeta"></div>
+            <div class="hitl-actions">
+              <button class="btn-hitl btn-hitl-accept" onclick="hitlDecide('accept')">✓ Accept</button>
+              <button class="btn-hitl btn-hitl-reject" onclick="hitlDecide('reject')">↻ Reject</button>
+              <button class="btn-hitl btn-hitl-modify" onclick="hitlShowModify()">✎ Modify</button>
+              <button class="btn-hitl btn-hitl-skip" onclick="hitlDecide('skip')">Skip</button>
+            </div>
+            <div class="hitl-modify-row" id="hitlModifyRow" style="display:none">
+              <input type="text" id="hitlModifySequence" class="ref-input" placeholder="Enter replacement sequence" />
+              <button class="btn-clear" onclick="hitlDecide('modify')">Submit</button>
+            </div>
+          </div>
+
+          <div class="result-card" id="commandResultCard" style="display:none">
+            <div class="result-card-header"><span class="result-icon">⌘</span> COMMAND RESULT</div>
+            <pre id="commandResultOutput" class="command-output"></pre>
+          </div>
+
+          <div class="result-card" id="bestCandidateCard" style="display:none">
+            <div class="result-card-header">
+              <span class="result-icon">🏆</span> BEST CANDIDATE
+              <a id="traceLink" class="trace-link" href="#" target="_blank" rel="noopener" style="display:none">View full trace →</a>
+            </div>
+            <div class="result-sequence" id="resultSequence"></div>
+            <div class="best-candidate-meta" id="bestCandidateMeta"></div>
+            <div class="best-candidate-actions">
+              <button class="btn-chip" onclick="copySequence()">Copy</button>
+              <button class="btn-chip" onclick="exportFasta()">Export FASTA</button>
+            </div>
+          </div>
+
+          <div class="result-card" id="errorCard" style="display:none">
+            <div class="result-card-header" style="color:var(--red)"><span class="result-icon">⚠️</span> ERROR</div>
+            <div id="errorMessage" class="error-message"></div>
+          </div>
         </div>
       </section>
 

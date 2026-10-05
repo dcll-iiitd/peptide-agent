@@ -19,20 +19,17 @@ const COMPONENT_LABELS = {
 };
 
 /* ── State ───────────────────────────────────────────────────────────────── */
-let activeActivities = new Set();
-let customMode = false;   // true = free-text prompt mode
-let currentPdb = null;    // raw PDB text for the last successful structure prediction
+let currentPdb = null;    // raw PDB text for the last successful structure prediction (Phase 5)
 let structureViewer = null;
 let currentHitlThreadId = null;  // thread_id of the generation currently paused for approval
 let commandThreadId = null;      // stable thread_id reused across /command calls this session
+let isGenerating = false;
+let currentSpec = null;          // last parsed/advanced-panel spec used for the active run
+let lastRunningStepKey = null;   // which progress step was "running" when an error arrived
 
 /* ── Init ────────────────────────────────────────────────────────────────── */
 function init() {
-  // buildActivityGrid()/updatePreview() targeted the old structured-form
-  // markup (#activityGrid, #promptPreview), which Phase 3's new shell
-  // doesn't have — that markup returns in Phase 4's generation workspace,
-  // at which point these calls (and the functions below) get reconnected.
-  // Calling them now against the new DOM would throw on a null element.
+  buildActivityDropdown();
   renderExperimentsList();
   checkHealth();
   handleSidebarResize();
@@ -57,7 +54,14 @@ function navigateTo(view) {
 
 function newExperiment() {
   navigateTo('generate');
-  // Phase 4 resets the generation form/chat state here.
+  if (isGenerating) return;
+  document.getElementById('generateActive').style.display = 'none';
+  document.getElementById('generateEmpty').style.display = '';
+  document.getElementById('genInput').value = '';
+  document.getElementById('advancedPanel').style.display = 'none';
+  document.querySelector('.view-placeholder-template')?.remove();
+  hideHitlPanel();
+  currentSpec = null;
 }
 
 function toggleSidebarCollapse() {
@@ -85,33 +89,56 @@ function handleSidebarResize() {
   }
 }
 
-/* ── Templates (Phase 3 stub) ─────────────────────────────────────────────
-   Phase 4 wires these into the real generation form/chat. For now, just
-   navigates to the Generate placeholder and names the selected template so
-   the interaction model is demonstrable before the form exists. */
-const TEMPLATE_LABELS = {
-  amp: 'Antimicrobial (AMP)',
-  cpp: 'Cell-Penetrating (CPP)',
-  antifungal: 'Antifungal',
-  antiviral: 'Antiviral',
-  immunological: 'Immunological',
-  custom: 'Custom',
+/* ── Templates (Phase 4) ───────────────────────────────────────────────────
+   Pre-fills both the free-text input and the Advanced panel fields so
+   either path (NL parse or Advanced) produces the same spec. */
+const TEMPLATE_PRESETS = {
+  amp: {
+    activity: 'anti-bacterial', length_min: 15, length_max: 20, charge_min: 2, charge_max: 5,
+    hydro_min: 35, hydro_max: 55,
+    text: 'Generate an antimicrobial peptide with 15–20 residues, charge +2 to +5, hydrophobicity 35–55%.',
+  },
+  cpp: {
+    activity: 'drug-delivery', length_min: 12, length_max: 16, charge_min: 4, charge_max: 8,
+    hydro_min: 30, hydro_max: 50,
+    text: 'Generate a cell-penetrating peptide with 12–16 residues, charge +4 to +8, hydrophobicity 30–50%.',
+  },
+  antifungal: {
+    activity: 'anti-fungal', length_min: 15, length_max: 25, charge_min: 2, charge_max: 6,
+    hydro_min: 35, hydro_max: 55,
+    text: 'Generate an antifungal peptide with 15–25 residues, charge +2 to +6, hydrophobicity 35–55%.',
+  },
+  antiviral: {
+    activity: 'anti-viral', length_min: 15, length_max: 25, charge_min: 2, charge_max: 6,
+    hydro_min: 30, hydro_max: 50,
+    text: 'Generate an antiviral peptide with 15–25 residues, charge +2 to +6, hydrophobicity 30–50%.',
+  },
+  immunological: {
+    activity: 'immunological', length_min: 10, length_max: 20, charge_min: 0, charge_max: 4,
+    hydro_min: 30, hydro_max: 50,
+    text: 'Generate an immunological/epitope peptide with 10–20 residues, charge 0 to +4, hydrophobicity 30–50%.',
+  },
 };
 
 function applyTemplate(name) {
   navigateTo('generate');
-  const el = document.querySelector('.view-placeholder-template');
-  if (el) {
-    el.textContent = `Selected template: ${TEMPLATE_LABELS[name] || name} — the generation form arrives in Phase 4.`;
+  const preset = TEMPLATE_PRESETS[name];
+  if (!preset) {
+    // "Custom" — just focus the free-text input, no prefill.
+    document.getElementById('genInput').focus();
+    return;
   }
+  document.getElementById('genInput').value = preset.text;
+  document.getElementById('advLenMin').value = preset.length_min;
+  document.getElementById('advLenMax').value = preset.length_max;
+  document.getElementById('advChargeMin').value = preset.charge_min;
+  document.getElementById('advChargeMax').value = preset.charge_max;
+  document.getElementById('advHydroMin').value = preset.hydro_min;
+  document.getElementById('advHydroMax').value = preset.hydro_max;
+  document.getElementById('advActivity').value = preset.activity;
 }
 
-/* ── Recent experiments (frontend_phase2_decisions.md Decision 3) ─────────
-   Phase 3 only reads/renders this list. Decision 3's write side ("In app.js
-   renderResult(): store thread_id/sequence/score/activity/timestamp/status
-   to localStorage, max 20 entries") belongs to whichever phase rebuilds
-   renderResult() against real result markup (Phase 5) — writing here now
-   would have nothing calling it yet. */
+/* ── Recent experiments (frontend_phase2_decisions.md Decision 3) ────────── */
 const EXPERIMENTS_KEY = 'pepforge_experiments';
 
 function loadExperiments() {
@@ -120,6 +147,23 @@ function loadExperiments() {
   } catch {
     return [];
   }
+}
+
+function recordExperiment(result, spec) {
+  const entry = {
+    thread_id: result.thread_id || null,
+    sequence: result.sequence || '',
+    score: result.score != null ? result.score : null,
+    activity: (spec && spec.activity) || '',
+    timestamp: Date.now(),
+    status: result.status || 'unknown',
+  };
+  const experiments = loadExperiments();
+  experiments.push(entry);
+  while (experiments.length > 20) experiments.shift();
+  try { localStorage.setItem(EXPERIMENTS_KEY, JSON.stringify(experiments)); } catch { /* storage unavailable */ }
+  try { sessionStorage.setItem('pepforge_current_experiment', JSON.stringify(entry)); } catch { /* storage unavailable */ }
+  renderExperimentsList();
 }
 
 function renderExperimentsList() {
@@ -143,171 +187,6 @@ function loadExperiment(threadId) {
   navigateTo('history');
 }
 
-function buildActivityGrid() {
-  const grid = document.getElementById('activityGrid');
-  grid.innerHTML = '';
-  ALL_ACTIVITIES.forEach(act => {
-    const chip = document.createElement('label');
-    chip.className = 'activity-chip';
-    chip.dataset.act = act;
-    chip.innerHTML = `<input type="checkbox" value="${act}" onchange="toggleActivity('${act}', this.checked)" />${act}`;
-    grid.appendChild(chip);
-  });
-}
-
-function toggleActivity(act, checked) {
-  if (checked) activeActivities.add(act);
-  else activeActivities.delete(act);
-  const chip = document.querySelector(`.activity-chip[data-act="${act}"]`);
-  if (chip) chip.classList.toggle('active', checked);
-  updatePreview();
-}
-
-/* ── Harness toggle (Week 4 task 5) ──────────────────────────────────────── */
-function onHarnessToggle() {
-  const useHarness = document.getElementById('harnessToggle').checked;
-  document.getElementById('hitlToggleWrap').style.display = useHarness ? 'flex' : 'none';
-  if (!useHarness) document.getElementById('hitlToggle').checked = false;
-}
-
-/* ── Custom prompt mode toggle ───────────────────────────────────────────── */
-function toggleCustomMode() {
-  customMode = !customMode;
-  const preview   = document.getElementById('promptPreview');
-  const hint      = document.getElementById('customHint');
-  const form      = document.getElementById('structuredForm');
-  const controls  = document.getElementById('customControls');
-  const badge     = document.getElementById('modeBadge');
-  const btnLabel  = document.getElementById('customBtnLabel');
-
-  if (customMode) {
-    preview.readOnly = false;
-    preview.style.color = 'var(--text-primary)';
-    preview.placeholder = 'Write your peptide specification here...\n\nExample:\nGenerate one antimicrobial peptide meeting ALL of:\n- Length: between 15 and 20 amino acids\n- Net charge: between +2 and +5\n- Hydrophobic fraction: between 35% and 55%\n- Alphabet: standard amino acids only\n\nOutput: one line, uppercase letters only.\nSequence:';
-    preview.value = '';
-    hint.style.display = 'block';
-    // Keep the form visible so the user can still set ranges for validation
-    form.style.display = 'block';
-    controls.style.display = 'none';
-    badge.textContent = 'CUSTOM';
-    badge.style.background = 'rgba(59,130,246,0.2)';
-    badge.style.color = '#60a5fa';
-    badge.style.borderColor = '#3b82f6';
-    btnLabel.textContent = '← Back to Form';
-  } else {
-    preview.readOnly = true;
-    preview.style.color = '';
-    preview.placeholder = 'Fill in the fields below — prompt preview will appear here';
-    hint.style.display = 'none';
-    form.style.display = 'block';
-    controls.style.display = 'none';
-    badge.textContent = 'STRUCTURED';
-    badge.style.background = '';
-    badge.style.color = '';
-    badge.style.borderColor = '';
-    btnLabel.textContent = 'Custom Prompt';
-    updatePreview();
-  }
-}
-
-/* ── Prompt preview (mirrors prompt_builder.py logic) ────────────────────── */
-function buildPromptText() {
-  const lenMin    = parseInt(document.getElementById('inputLenMin').value)  || 15;
-  const lenMax    = parseInt(document.getElementById('inputLenMax').value)  || 20;
-  const chargeMin = parseInt(document.getElementById('inputChargeMin').value);
-  const chargeMax = parseInt(document.getElementById('inputChargeMax').value);
-  const hydroMin  = parseInt(document.getElementById('inputHydroMin').value) || 35;
-  const hydroMax  = parseInt(document.getElementById('inputHydroMax').value) || 55;
-  const acts      = [...activeActivities];
-
-  const actLabels = {
-    'anti-bacterial': 'antimicrobial (AMP)', 'anti-fungal': 'antifungal (AMP)',
-    'anti-viral': 'antiviral (AMP)', 'anti-cancer': 'anticancer (AMP)',
-    'drug-delivery': 'cell-penetrating (CPP)', 'signal-peptide': 'signal peptide',
-    'immunological': 'immunological / epitope',
-  };
-  const actStr = acts.length
-    ? acts.map(a => actLabels[a] || a).join(', ')
-    : 'general';
-
-  const cLoStr = isNaN(chargeMin) ? '?' : (chargeMin >= 0 ? `+${chargeMin}` : `${chargeMin}`);
-  const cHiStr = isNaN(chargeMax) ? '?' : (chargeMax >= 0 ? `+${chargeMax}` : `${chargeMax}`);
-
-  return [
-    `Generate one ${actStr} peptide meeting ALL of:`,
-    `- Length: between ${lenMin} and ${lenMax} amino acids`,
-    `- Net charge: between ${cLoStr} and ${cHiStr}`,
-    `- Hydrophobic fraction: between ${hydroMin}% and ${hydroMax}%`,
-    `- Alphabet: 20 standard amino acids only`,
-    ``,
-    `Output: one line, uppercase letters only, nothing else.`,
-    `Sequence:`,
-  ].join('\n');
-}
-
-function updatePreview() {
-  if (customMode) return;
-  document.getElementById('promptPreview').value = buildPromptText();
-}
-
-/* ── Quick-start presets ─────────────────────────────────────────────────── */
-function applyPreset(name) {
-  if (customMode) toggleCustomMode();   // switch back to structured form
-  clearActivities();
-
-  if (name === 'antimicrobial') {
-    document.getElementById('inputLenMin').value    = 15;
-    document.getElementById('inputLenMax').value    = 20;
-    document.getElementById('inputChargeMin').value = 2;
-    document.getElementById('inputChargeMax').value = 5;
-    document.getElementById('inputHydroMin').value  = 35;
-    document.getElementById('inputHydroMax').value  = 55;
-    setActivity('anti-bacterial', true);
-  } else if (name === 'cpp') {
-    document.getElementById('inputLenMin').value    = 12;
-    document.getElementById('inputLenMax').value    = 16;
-    document.getElementById('inputChargeMin').value = 4;
-    document.getElementById('inputChargeMax').value = 8;
-    document.getElementById('inputHydroMin').value  = 30;
-    document.getElementById('inputHydroMax').value  = 50;
-    setActivity('drug-delivery', true);
-  }
-  updatePreview();
-}
-
-function setActivity(act, on) {
-  const chip = document.querySelector(`.activity-chip[data-act="${act}"]`);
-  if (!chip) return;
-  const cb = chip.querySelector('input');
-  cb.checked = on;
-  if (on) activeActivities.add(act);
-  else activeActivities.delete(act);
-  chip.classList.toggle('active', on);
-}
-
-function clearActivities() {
-  activeActivities.clear();
-  document.querySelectorAll('.activity-chip').forEach(chip => {
-    chip.classList.remove('active');
-    chip.querySelector('input').checked = false;
-  });
-}
-
-function clearForm() {
-  if (customMode) toggleCustomMode();
-  document.getElementById('inputLenMin').value    = 15;
-  document.getElementById('inputLenMax').value    = 20;
-  document.getElementById('inputChargeMin').value = 2;
-  document.getElementById('inputChargeMax').value = 5;
-  document.getElementById('inputHydroMin').value  = 35;
-  document.getElementById('inputHydroMax').value  = 55;
-  document.getElementById('inputRetries').value   = 6;
-  document.getElementById('inputRef').value       = '';
-  clearActivities();
-  resetResults();
-  updatePreview();
-}
-
 /* ── Health check ────────────────────────────────────────────────────────── */
 async function checkHealth() {
   try {
@@ -326,82 +205,203 @@ function setStatus(ok) {
   text.textContent = ok ? 'Ready' : 'Error';
 }
 
-/* ── Generation ──────────────────────────────────────────────────────────── */
-let eventSource = null;
+/* ── Advanced panel (Phase 4) ─────────────────────────────────────────────── */
+function buildActivityDropdown() {
+  const sel = document.getElementById('advActivity');
+  sel.innerHTML = '<option value="">(none — general)</option>' +
+    ALL_ACTIVITIES.map(a => `<option value="${a}">${a}</option>`).join('');
+}
 
-async function generate() {
-  if (eventSource) { eventSource.close(); eventSource = null; }
+function toggleAdvancedPanel() {
+  const panel = document.getElementById('advancedPanel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+}
 
-  let body;
+function openAdvancedPanel() {
+  document.getElementById('advancedPanel').style.display = 'block';
+}
 
-  if (customMode) {
-    const promptText = document.getElementById('promptPreview').value.trim();
-    if (!promptText) {
-      alert('Please write a prompt in the text area first.');
-      return;
-    }
-    const lenMin    = parseInt(document.getElementById('inputLenMin').value);
-    const lenMax    = parseInt(document.getElementById('inputLenMax').value);
-    const chargeMin = parseFloat(document.getElementById('inputChargeMin').value);
-    const chargeMax = parseFloat(document.getElementById('inputChargeMax').value);
-    const hydroMin  = parseFloat(document.getElementById('inputHydroMin').value);
-    const hydroMax  = parseFloat(document.getElementById('inputHydroMax').value);
-    const retries   = parseInt(document.getElementById('inputRetries').value) || 6;
-    const ref       = document.getElementById('inputRef').value.trim() || null;
-    body = {
-      prompt_override: promptText,
-      activities: [...activeActivities],
-      max_retries: retries,
-      threshold: 0.35,
-      length_min: isNaN(lenMin) ? 15 : lenMin,
-      length_max: isNaN(lenMax) ? 20 : lenMax,
-      charge_min: isNaN(chargeMin) ? 0 : chargeMin,
-      charge_max: isNaN(chargeMax) ? 5 : chargeMax,
-      hydro_min: isNaN(hydroMin) ? undefined : hydroMin,
-      hydro_max: isNaN(hydroMax) ? undefined : hydroMax,
-      reference: ref,
-    };
+function readAdvancedPanel() {
+  return {
+    activity: document.getElementById('advActivity').value,
+    length_min: parseInt(document.getElementById('advLenMin').value) || 10,
+    length_max: parseInt(document.getElementById('advLenMax').value) || 50,
+    charge_min: parseFloat(document.getElementById('advChargeMin').value) || 0,
+    charge_max: parseFloat(document.getElementById('advChargeMax').value) || 5,
+    hydro_min: parseFloat(document.getElementById('advHydroMin').value) || 0,
+    hydro_max: parseFloat(document.getElementById('advHydroMax').value) || 100,
+    max_retries: parseInt(document.getElementById('advMaxRetries').value) || 6,
+    threshold: parseFloat(document.getElementById('advThreshold').value) || 0.35,
+    hitl_enabled: document.getElementById('advHitlEnabled').checked,
+    use_legacy: document.getElementById('advUseLegacy').checked,
+  };
+}
+
+/* ── Slash command menu (Phase 4) ─────────────────────────────────────────── */
+const COMMAND_MENU_ITEMS = [
+  { cmd: '/generate', desc: 'Generate peptide' },
+  { cmd: '/score', desc: 'Score sequence' },
+  { cmd: '/edit', desc: 'Refine sequence' },
+  { cmd: '/compare', desc: 'Compare candidates' },
+  { cmd: '/explain', desc: 'Explain sequence' },
+  { cmd: '/history', desc: 'Previous experiments' },
+];
+
+function toggleCommandMenu() {
+  const menu = document.getElementById('commandMenu');
+  if (menu.style.display !== 'none') { menu.style.display = 'none'; return; }
+  menu.innerHTML = COMMAND_MENU_ITEMS.map(c =>
+    `<div class="command-menu-item" onclick="insertCommand('${c.cmd}')"><b>${c.cmd}</b>${c.desc}</div>`
+  ).join('');
+  menu.style.display = 'block';
+}
+
+function insertCommand(cmd) {
+  const input = document.getElementById('genInput');
+  input.value = `${cmd} `;
+  input.focus();
+  document.getElementById('commandMenu').style.display = 'none';
+}
+
+function onGenInputChange() {
+  const input = document.getElementById('genInput');
+  const menu = document.getElementById('commandMenu');
+  if (input.value.startsWith('/') && !input.value.includes(' ')) {
+    if (menu.style.display === 'none') toggleCommandMenu();
   } else {
-    const lenMin    = parseInt(document.getElementById('inputLenMin').value);
-    const lenMax    = parseInt(document.getElementById('inputLenMax').value);
-    const chargeMin = parseFloat(document.getElementById('inputChargeMin').value);
-    const chargeMax = parseFloat(document.getElementById('inputChargeMax').value);
-    const hydroMin  = parseFloat(document.getElementById('inputHydroMin').value);
-    const hydroMax  = parseFloat(document.getElementById('inputHydroMax').value);
-    const retries   = parseInt(document.getElementById('inputRetries').value);
-    const ref       = document.getElementById('inputRef').value.trim() || null;
+    menu.style.display = 'none';
+  }
+}
 
-    if (isNaN(lenMin) || isNaN(lenMax) || lenMin < 2 || lenMax < lenMin) {
-      alert('Please enter a valid length range (min ≥ 2, max ≥ min).');
-      return;
-    }
-    if (isNaN(chargeMin) || isNaN(chargeMax) || chargeMax < chargeMin) {
-      alert('Please enter a valid charge range (max ≥ min).');
-      return;
-    }
+/* ── Natural-language spec parsing (frontend_phase2_decisions.md Decision 6)
+   Simple keyword/number extraction, frontend-only — no backend NLP
+   endpoint. Falls back to showing the Advanced panel when nothing
+   meaningful was parsed, rather than silently guessing defaults. */
+const ACTIVITY_KEYWORDS = {
+  'anti-bacterial': ['antibacterial', 'antimicrobial', 'amp'],
+  'anti-fungal': ['antifungal'],
+  'anti-viral': ['antiviral'],
+  'anti-cancer': ['anticancer', 'antitumor', 'anti-cancer'],
+  'anti-parasitic': ['antiparasitic'],
+  'drug-delivery': ['cell-penetrating', 'cell penetrating', 'cpp', 'drug delivery', 'drug-delivery'],
+  'signal-peptide': ['signal peptide', 'signal-peptide'],
+  'immunological': ['immunological', 'immune', 'epitope'],
+  'toxic': ['toxic', 'toxin'],
+  'cell-cell-communication': ['cell-cell', 'cell to cell signal'],
+  'inhibitor': ['inhibitor', 'inhibitory'],
+  'metabolic': ['metabolic'],
+};
 
-    body = {
-      length_min: lenMin,
-      length_max: lenMax,
-      charge_min: chargeMin,
-      charge_max: chargeMax,
-      hydro_min: isNaN(hydroMin) ? undefined : hydroMin,
-      hydro_max: isNaN(hydroMax) ? undefined : hydroMax,
-      activities: [...activeActivities],
-      reference: ref,
-      max_retries: retries,
-      threshold: 0.35,
-    };
+function parseNaturalLanguage(text) {
+  const lower = text.toLowerCase();
+  const spec = {
+    activity: '', length_min: null, length_max: null,
+    charge_min: null, charge_max: null, hydro_min: null, hydro_max: null,
+    max_retries: 6, threshold: 0.35, hitl_enabled: false, use_legacy: false,
+  };
+  let matched = 0;
+
+  for (const [act, keywords] of Object.entries(ACTIVITY_KEYWORDS)) {
+    if (keywords.some(k => lower.includes(k))) { spec.activity = act; matched++; break; }
   }
 
-  const useHarness = document.getElementById('harnessToggle').checked;
-  if (useHarness) {
-    body.hitl_enabled = document.getElementById('hitlToggle').checked;
+  let m = lower.match(/(\d+)\s*(?:-|to|–)\s*(\d+)\s*(?:residues|amino acids|aa)/);
+  if (m) {
+    spec.length_min = parseInt(m[1]); spec.length_max = parseInt(m[2]); matched++;
+  } else {
+    m = lower.match(/(\d+)\s*(?:residues|amino acids|aa)\b/);
+    if (m) { spec.length_min = spec.length_max = parseInt(m[1]); matched++; }
   }
 
-  resetResults();
-  setGenerating(true);
-  clearTrace();
+  m = lower.match(/charge[^+\-\d]*([+-]?\d+)\s*(?:to|and|–|-)\s*([+-]?\d+)/);
+  if (m) { spec.charge_min = parseInt(m[1]); spec.charge_max = parseInt(m[2]); matched++; }
+
+  m = lower.match(/(?:hydrophobicity|hydrophobic|hydro)[^%\d]*(\d+)\s*%?\s*(?:to|and|–|-)\s*(\d+)\s*%/);
+  if (m) { spec.hydro_min = parseFloat(m[1]); spec.hydro_max = parseFloat(m[2]); matched++; }
+
+  spec.confidence = matched === 0 ? 'low' : matched === 1 ? 'medium' : 'high';
+
+  if (spec.length_min == null) { spec.length_min = 10; spec.length_max = 50; }
+  if (spec.charge_min == null) { spec.charge_min = 2; spec.charge_max = 5; }
+  if (spec.hydro_min == null) { spec.hydro_min = 30; spec.hydro_max = 50; }
+
+  return spec;
+}
+
+/* ── Generation (Phase 4) ─────────────────────────────────────────────────── */
+function startGeneration() {
+  if (isGenerating) return;
+
+  const text = document.getElementById('genInput').value.trim();
+  if (text.startsWith('/')) {
+    runSlashCommand(text);
+    return;
+  }
+
+  const advancedOpen = document.getElementById('advancedPanel').style.display !== 'none';
+  let spec;
+  if (advancedOpen) {
+    spec = readAdvancedPanel();
+  } else {
+    if (!text) {
+      alert('Describe your peptide objective, or open Advanced to set fields directly.');
+      return;
+    }
+    const parsed = parseNaturalLanguage(text);
+    if (parsed.confidence === 'low') {
+      openAdvancedPanel();
+      alert("Couldn't confidently parse that — set the fields in Advanced and click Generate again.");
+      return;
+    }
+    spec = parsed;
+  }
+
+  currentSpec = spec;
+  showParsedSpecCard(spec);
+  runGeneration(spec);
+}
+
+function fmtCharge(v) { return v >= 0 ? `+${v}` : `${v}`; }
+
+function showParsedSpecCard(spec) {
+  document.getElementById('specCard').style.display = 'block';
+  document.getElementById('progressCard').style.display = 'block';
+  document.getElementById('specGrid').innerHTML = `
+    <div class="spec-row"><span class="spec-label">Activity</span><span class="spec-value">${spec.activity || '(none — general)'}</span></div>
+    <div class="spec-row"><span class="spec-label">Length</span><span class="spec-value">${spec.length_min}–${spec.length_max} aa</span></div>
+    <div class="spec-row"><span class="spec-label">Net charge</span><span class="spec-value">${fmtCharge(spec.charge_min)} to ${fmtCharge(spec.charge_max)}</span></div>
+    <div class="spec-row"><span class="spec-label">Hydrophobicity</span><span class="spec-value">${spec.hydro_min}–${spec.hydro_max}%</span></div>
+    <div class="spec-row"><span class="spec-label">Max rounds</span><span class="spec-value">${spec.max_retries}</span></div>
+  `;
+}
+
+async function runGeneration(spec) {
+  isGenerating = true;
+  document.getElementById('generateEmpty').style.display = 'none';
+  document.getElementById('generateActive').style.display = 'block';
+  document.getElementById('commandResultCard').style.display = 'none';
+  document.getElementById('bestCandidateCard').style.display = 'none';
+  document.getElementById('errorCard').style.display = 'none';
+  hideHitlPanel();
+  resetProgressTimeline();
+  setStepState('input_guardrail', 'running');
+  lastRunningStepKey = 'input_guardrail';
+
+  const useHarness = !spec.use_legacy;
+  const body = {
+    activities: spec.activity ? [spec.activity] : [],
+    length_min: spec.length_min,
+    length_max: spec.length_max,
+    charge_min: spec.charge_min,
+    charge_max: spec.charge_max,
+    hydro_min: spec.hydro_min,
+    hydro_max: spec.hydro_max,
+    max_retries: spec.max_retries,
+    threshold: spec.threshold,
+  };
+  if (useHarness) body.hitl_enabled = !!spec.hitl_enabled;
+
+  let attemptCount = 0;
 
   try {
     const response = await fetch(`${API_BASE}/generate${useHarness ? '?harness=true' : ''}`, {
@@ -426,34 +426,163 @@ async function generate() {
         if (line.startsWith('data: ')) {
           const raw = line.slice(6).trim();
           if (!raw || raw === '[DONE]') continue;
-          try { handleEvent(JSON.parse(raw)); } catch { /* skip malformed */ }
+          try {
+            const evt = JSON.parse(raw);
+            attemptCount = handleGenerationEvent(evt, attemptCount);
+          } catch { /* skip malformed */ }
         }
       }
     }
   } catch (err) {
-    addTraceRow({ n: '!', sequence: '', score: null, passed: false, issues: [String(err)] });
-    setStatus(false);
+    setStepState(lastRunningStepKey || 'input_guardrail', 'failed');
+    showErrorCard(String(err));
   } finally {
-    setGenerating(false);
+    isGenerating = false;
   }
 }
 
-function handleEvent(evt) {
+function handleGenerationEvent(evt, attemptCount) {
   if (evt.type === 'attempt') {
-    addTraceRow(evt);
-    renderViolations(evt.violations);
+    attemptCount++;
+    if (attemptCount === 1) {
+      ['input_guardrail', 'rag_retrieval', 'reference_selection', 'generation', 'scoring', 'validation']
+        .forEach(k => setStepState(k, 'completed'));
+      setStepState('refinement', 'running');
+      lastRunningStepKey = 'refinement';
+    }
   } else if (evt.type === 'hitl') {
     showHitlPanel(evt.data);
   } else if (evt.type === 'final') {
     hideHitlPanel();
-    renderResult(evt.result);
+    setStepState('refinement', 'completed');
+    setStepState('post_hoc', 'completed');
+    setStepState('output_guardrail', 'completed');
+    showBestCandidate(evt.result);
+    recordExperiment(evt.result, currentSpec);
   } else if (evt.type === 'error') {
-    addTraceRow({ n: '!', sequence: '', score: null, passed: false });
-    console.error('harness error:', evt.message, evt.traceback);
+    setStepState(lastRunningStepKey || 'generation', 'failed');
+    showErrorCard(evt.message || 'Generation failed.');
+  }
+  return attemptCount;
+}
+
+async function runSlashCommand(text) {
+  if (!commandThreadId) commandThreadId = crypto.randomUUID();
+
+  document.getElementById('generateEmpty').style.display = 'none';
+  document.getElementById('generateActive').style.display = 'block';
+  document.getElementById('specCard').style.display = 'none';
+  document.getElementById('progressCard').style.display = 'none';
+  document.getElementById('bestCandidateCard').style.display = 'none';
+  document.getElementById('errorCard').style.display = 'none';
+
+  const out = document.getElementById('commandResultOutput');
+  const card = document.getElementById('commandResultCard');
+  out.textContent = 'Running…';
+  card.style.display = 'block';
+
+  try {
+    const r = await fetch(`${API_BASE}/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, thread_id: commandThreadId }),
+    });
+    const data = await r.json();
+    out.textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    out.textContent = `Error: ${err}`;
   }
 }
 
-/* ── HITL approval panel (Week 4 task 5) ─────────────────────────────────── */
+/* ── Agent progress timeline (Phase 4) ────────────────────────────────────
+   Labels are presentational only per frontend_phase2_decisions.md Decision
+   1 — they do NOT correspond 1:1 to harness/graph.py's real node names
+   (see frontend/AUDIT.md's REFERENCE IMAGE OBSERVATIONS). The SSE stream
+   only emits one coarse "attempt" event per full lap (at the real "track"
+   node) — there is no per-node "now running X" signal — so steps 1-6 flip
+   to completed together on the first attempt, and "Refinement" stands in
+   for the whole generate/edit loop rather than a single real node. */
+const PROGRESS_STEPS = [
+  { key: 'input_guardrail', label: 'Input Guardrail' },
+  { key: 'rag_retrieval', label: 'RAG Retrieval' },
+  { key: 'reference_selection', label: 'Reference Selection' },
+  { key: 'generation', label: 'Generation' },
+  { key: 'scoring', label: 'Scoring' },
+  { key: 'validation', label: 'Validation' },
+  { key: 'refinement', label: 'Refinement' },
+  { key: 'post_hoc', label: 'Post-hoc Analysis' },
+  { key: 'output_guardrail', label: 'Output Guardrail' },
+];
+
+function resetProgressTimeline() {
+  document.getElementById('progressTimeline').innerHTML = PROGRESS_STEPS.map(s => `
+    <div class="progress-step" data-step="${s.key}">
+      <span class="progress-step-icon">○</span>
+      <span class="progress-step-label">${s.label}</span>
+    </div>
+  `).join('');
+}
+
+function setStepState(key, state) {
+  const row = document.querySelector(`.progress-step[data-step="${key}"]`);
+  if (!row) return;
+  row.classList.remove('completed', 'running', 'failed');
+  const icon = row.querySelector('.progress-step-icon');
+  if (state === 'completed') { row.classList.add('completed'); icon.textContent = '✓'; }
+  else if (state === 'running') { row.classList.add('running'); icon.textContent = '●'; }
+  else if (state === 'failed') { row.classList.add('failed'); icon.textContent = '✗'; }
+  else { icon.textContent = '○'; }
+}
+
+/* ── Best candidate card (Phase 4 — minimal; full tabs are Phase 5) ──────── */
+function showBestCandidate(result) {
+  const card = document.getElementById('bestCandidateCard');
+  const seqEl = document.getElementById('resultSequence');
+  const metaEl = document.getElementById('bestCandidateMeta');
+
+  seqEl.textContent = result.sequence || 'No sequence generated';
+  const displayScore = result.score != null ? result.score : result.rulebook_score;
+  seqEl.className = 'result-sequence' + (displayScore != null ? ' ' + scoreClass(displayScore) : '');
+
+  const parts = [];
+  if (result.score != null) parts.push(`PeptideBLEU <b>${result.score.toFixed(4)}</b>`);
+  if (result.rulebook_score != null) parts.push(`Rulebook <b>${result.rulebook_score.toFixed(2)}</b>`);
+  parts.push(`Status <b>${result.status === 'complete' ? 'Passed' : (result.status || 'unknown')}</b>`);
+  if (result.iterations != null) parts.push(`Iterations <b>${result.iterations}</b>`);
+  if (result.time_seconds != null) parts.push(`Time <b>${result.time_seconds.toFixed(1)}s</b>`);
+  metaEl.innerHTML = parts.map(p => `<span>${p}</span>`).join('');
+
+  renderTraceLink(result.trace_url);
+  card.style.display = 'block';
+}
+
+function showErrorCard(message) {
+  document.getElementById('errorMessage').textContent = message;
+  document.getElementById('errorCard').style.display = 'block';
+}
+
+function copySequence() {
+  const seq = document.getElementById('resultSequence').textContent.trim();
+  if (!seq) return;
+  navigator.clipboard?.writeText(seq).catch(() => {});
+}
+
+function exportFasta() {
+  const seq = document.getElementById('resultSequence').textContent.trim();
+  if (!seq) return;
+  const fasta = `>PepForge_candidate\n${seq}\n`;
+  const blob = new Blob([fasta], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${seq.slice(0, 20)}.fasta`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/* ── HITL approval panel (Week 4 task 5, reused as-is in Phase 4) ────────── */
 function showHitlPanel(data) {
   currentHitlThreadId = data.thread_id;
   document.getElementById('hitlSequence').textContent = data.sequence || '';
@@ -501,10 +630,11 @@ async function hitlDecide(action) {
   }
 }
 
-/* ── Diagnostic violations (Week 4 task 5, harness mode only) ────────────── */
+/* ── Diagnostic violations (dormant — Phase 5's Trace/Properties tab) ────── */
 function renderViolations(violations) {
   const card = document.getElementById('violationsCard');
   const list = document.getElementById('violationsList');
+  if (!card || !list) return;
   if (!violations || violations.length === 0) {
     card.style.display = 'none';
     list.innerHTML = '';
@@ -520,10 +650,11 @@ function renderViolations(violations) {
   card.style.display = 'block';
 }
 
-/* ── Edit statistics (Week 4 task 5, harness mode only) ──────────────────── */
+/* ── Edit statistics (dormant — Phase 5's Trace tab) ──────────────────────── */
 function renderEditStats(stats) {
   const card = document.getElementById('editStatsCard');
   const list = document.getElementById('editStatsList');
+  if (!card || !list) return;
   list.innerHTML = '';
   if (!stats || Object.keys(stats).length === 0) {
     card.style.display = 'none';
@@ -542,173 +673,16 @@ function renderEditStats(stats) {
   card.style.display = 'block';
 }
 
-/* ── LangSmith trace link (Week 4 task 5) ─────────────────────────────────── */
+/* ── LangSmith trace link (actively used by showBestCandidate) ───────────── */
 function renderTraceLink(url) {
   const link = document.getElementById('traceLink');
+  if (!link) return;
   if (!url) { link.style.display = 'none'; return; }
   link.href = url;
   link.style.display = 'inline-block';
 }
 
-/* ── Slash commands (Week 4 task 5) ──────────────────────────────────────── */
-async function runCommand() {
-  const input = document.getElementById('commandInput');
-  const text = input.value.trim();
-  if (!text) return;
-  if (!commandThreadId) commandThreadId = crypto.randomUUID();
-
-  const out = document.getElementById('commandOutput');
-  out.textContent = 'Running…';
-  try {
-    const r = await fetch(`${API_BASE}/command`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, thread_id: commandThreadId }),
-    });
-    const data = await r.json();
-    out.textContent = JSON.stringify(data, null, 2);
-  } catch (err) {
-    out.textContent = `Error: ${err}`;
-  }
-}
-
-/* ── Results rendering ───────────────────────────────────────────────────── */
-function resetResults() {
-  document.getElementById('resultSequence').textContent = 'ASSISTANT';
-  document.getElementById('resultSequence').className   = 'result-sequence';
-  document.getElementById('bleuValue').textContent  = '0.0000';
-  document.getElementById('rbScoreValue').textContent = '0.0000';
-  document.getElementById('iterValue').textContent  = '–';
-  document.getElementById('timeValue').textContent  = '–';
-  document.getElementById('metricBleu').className   = 'metric-badge metric-bleu';
-  document.getElementById('metricRulebook').className = 'metric-badge metric-rulebook';
-  document.getElementById('metricPlddt').style.display = 'none';
-  document.getElementById('refNote').textContent = '';
-  document.getElementById('componentCard').style.display = 'none';
-  document.getElementById('dsspCard').style.display = 'none';
-  document.getElementById('structureCard').style.display = 'none';
-  currentPdb = null;
-  structureViewer = null;
-  document.getElementById('structureViewer').innerHTML = '';
-  document.getElementById('graphCard').style.display = 'none';
-  document.getElementById('violationsCard').style.display = 'none';
-  document.getElementById('editStatsCard').style.display = 'none';
-  document.getElementById('traceLink').style.display = 'none';
-  hideHitlPanel();
-  // ── Structural graph analysis UI (temporarily disabled) ──
-  // document.getElementById('protein-graph-container').style.display = 'none';
-}
-
-function clearTrace() {
-  document.getElementById('traceList').innerHTML =
-    '<div class="trace-empty">Generating…</div>';
-}
-
-/* Generate/edit mode badges — additive alongside the existing PASS/FAIL/ERR trace rows */
-const MODE_BADGES = {
-  generate:            { label: 'GENERATE',          color: '#64748b' },
-  llm_edit:            { label: null /* + weakest */, color: '#3b82f6' },
-  deterministic:       { label: 'EDIT det',          color: '#00e5c3' },
-  edit_explored:       { label: null /* + weakest */, color: '#fbbf24' },
-  edit_stuck:          { label: 'edit_stuck',        color: '#64748b' },
-  motif_inject:        { label: 'MOTIF INJECT',      color: '#10b981' },
-  escape_positional:   { label: 'ESCAPE 1: positions', color: '#f97316' },
-  escape_forced:       { label: 'ESCAPE 2: forced',  color: '#f97316' },
-  escape_exact:        { label: 'ESCAPE 3: exact',   color: '#f97316' },
-  generate_degenerate: { label: 'generate_degen',    color: '#ef4444' },
-};
-
-function modeBadgeHtml(mode, weakest) {
-  if (!mode) return '';
-  const cfg = MODE_BADGES[mode];
-  if (!cfg) return '';
-  const prefix = mode === 'edit_explored' ? 'explored' : 'EDIT';
-  const label = cfg.label || `${prefix} ${weakest || ''}`.trim();
-  return `<span class="mode-badge" style="color:${cfg.color};border-color:${cfg.color}">${label}</span>`;
-}
-
-function deltaHtml(delta) {
-  if (delta == null) return '';
-  if (delta > 0) return `<span class="delta-badge delta-up">+${delta.toFixed(4)} ↑</span>`;
-  if (delta < 0) return `<span class="delta-badge delta-down">${delta.toFixed(4)} ↓</span>`;
-  return `<span class="delta-badge delta-same">±0.0000 →</span>`;
-}
-
-function addTraceRow(evt) {
-  const list = document.getElementById('traceList');
-  const empty = list.querySelector('.trace-empty');
-  if (empty) empty.remove();
-
-  const seqPreview = evt.sequence
-    ? evt.sequence.slice(0, 20) + (evt.sequence.length > 20 ? '…' : '')
-    : '—';
-  const bleuStr = evt.score != null ? evt.score.toFixed(4) : '–';
-  const rbStr   = evt.rulebook_score != null ? evt.rulebook_score.toFixed(2) : '–';
-  const statusWord = evt.passed ? 'PASS' : (evt.sequence ? 'FAIL' : 'ERR');
-
-  const row = document.createElement('div');
-  row.className = `trace-row ${evt.passed ? 'pass' : (evt.sequence ? 'fail' : 'error')}`;
-  row.innerHTML =
-    `<span class="trace-status">${evt.passed ? '✓' : '✗'}</span>` +
-    modeBadgeHtml(evt.mode, evt.weakest) +
-    `Attempt ${evt.n}: ${seqPreview} | BLEU: ${bleuStr} | RB: ${rbStr} | ${statusWord}` +
-    (evt.sequence ? deltaHtml(evt.delta_score) : '');
-
-  list.appendChild(row);
-}
-
-function renderResult(result) {
-  const seq   = result.sequence || '';
-  const score = result.score;
-  const rb    = result.rulebook_score;
-
-  const seqEl = document.getElementById('resultSequence');
-  seqEl.textContent = seq || 'No sequence generated';
-  const displayScore = score != null ? score : rb;
-  if (displayScore != null) {
-    seqEl.className = 'result-sequence ' + scoreClass(displayScore);
-  }
-
-  if (score != null) {
-    document.getElementById('bleuValue').textContent = score.toFixed(4);
-    document.getElementById('metricBleu').className =
-      'metric-badge metric-bleu ' + scoreClass(score);
-  }
-
-  if (rb != null) {
-    document.getElementById('rbScoreValue').textContent = rb.toFixed(4);
-    document.getElementById('metricRulebook').className =
-      'metric-badge metric-rulebook ' + scoreClass(rb);
-  }
-
-  const refNote = document.getElementById('refNote');
-  if (result.reference_used && result.reference_used.startsWith('default:')) {
-    const preset = result.reference_used.split(':')[1];
-    refNote.textContent = `* PeptideBLEU scored vs canonical ${preset.toUpperCase()} reference`;
-  } else if (result.reference_used === 'user') {
-    refNote.textContent = '* PeptideBLEU scored vs your reference sequence';
-  } else {
-    refNote.textContent = '* No reference — PeptideBLEU not computed';
-  }
-
-  document.getElementById('iterValue').textContent = result.iterations ?? '–';
-  document.getElementById('timeValue').textContent = result.time_seconds != null
-    ? result.time_seconds.toFixed(1) + 's' : '–';
-
-  renderPlddt(result.plddt_score, result.plddt_confidence);
-  renderStructure(result.plddt_pdb);
-  renderGraphFeatures(result.graph_features);
-  renderDssp(result.secondary_structure);
-  renderNovelty(result.blast_similarity);
-  renderEditStats(result.edit_stats);
-  renderTraceLink(result.trace_url);
-
-  if (result.components && Object.keys(result.components).length > 0) {
-    renderComponents(result.components, result.plddt_score, result.secondary_structure?.helix_pct);
-  }
-}
-
-/* pLDDT (ESMFold) structural confidence — additive, alongside PeptideBLEU/rulebook */
+/* pLDDT (ESMFold) structural confidence — dormant, Phase 5's Structure tab */
 const PLDDT_COLORS = {
   very_high: { color: '#00e5c3', label: 'Very High' },
   high:      { color: '#3b82f6', label: 'Confident' },
@@ -720,6 +694,7 @@ const PLDDT_COLORS = {
 function renderPlddt(score, confidence) {
   const badge = document.getElementById('metricPlddt');
   const valueEl = document.getElementById('plddtValue');
+  if (!badge || !valueEl) return;
   if (score == null) {
     badge.style.display = 'none';
     return;
@@ -730,7 +705,7 @@ function renderPlddt(score, confidence) {
   badge.style.display = '';
 }
 
-/* BLAST novelty assessment — additive, alongside pLDDT/DSSP */
+/* BLAST novelty assessment — dormant, Phase 5's Novelty tab */
 const NOVELTY_COLORS = {
   novel:          { color: '#00e5c3', label: 'Novel' },
   low_similarity: { color: '#34d399', label: 'Mostly Novel' },
@@ -745,6 +720,7 @@ function renderNovelty(blast) {
   const card = document.getElementById('noveltyCard');
   const barsEl = document.getElementById('noveltyBars');
   const interpEl = document.getElementById('noveltyInterp');
+  if (!badge || !card) return;
 
   if (!blast) {
     badge.style.display = 'none';
@@ -792,9 +768,10 @@ function renderNovelty(blast) {
   card.style.display = 'block';
 }
 
-/* 3D structure (ESMFold PDB) — embedded 3Dmol.js viewer + raw-file download */
+/* 3D structure (ESMFold PDB) — dormant, Phase 5's Structure tab */
 function renderStructure(pdbText) {
   const card = document.getElementById('structureCard');
+  if (!card) return;
   currentPdb = pdbText || null;
 
   if (!pdbText) {
@@ -837,7 +814,7 @@ function downloadPdb() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  const seq = document.getElementById('resultSequence').textContent.trim();
+  const seq = document.getElementById('resultSequence')?.textContent.trim();
   a.download = `${seq || 'structure'}.pdb`;
   document.body.appendChild(a);
   a.click();
@@ -845,8 +822,7 @@ function downloadPdb() {
   URL.revokeObjectURL(url);
 }
 
-/* Structural graph analysis (H-bonds/ionic/pi-pi interactions) — additive,
-   derived from the same ESMFold PDB structure as the pLDDT badge/viewer. */
+/* Structural graph analysis — dormant, Phase 5 (if re-enabled) */
 function graphScoreStyle(score) {
   if (score >= 3.0) return { color: '#00e5c3', label: 'Highly Structured' };
   if (score >= 1.5) return { color: '#3b82f6', label: 'Moderately Structured' };
@@ -856,9 +832,9 @@ function graphScoreStyle(score) {
 
 function renderGraphFeatures(graph) {
   const card = document.getElementById('graphCard');
+  if (!card) return;
   if (!graph || graph.structure_score == null) {
     card.style.display = 'none';
-    // document.getElementById('protein-graph-container').style.display = 'none';
     return;
   }
 
@@ -879,19 +855,9 @@ function renderGraphFeatures(graph) {
 
   document.getElementById('graphInterp').textContent = graph.interpretation || '';
   card.style.display = 'block';
-
-  // ── Structural graph analysis UI (temporarily disabled) ──
-  // if (graph.edges && graph.nodes) {
-  //   renderProteinGraph(graph);
-  // } else {
-  //   document.getElementById('protein-graph-container').style.display = 'none';
-  // }
 }
 
-/* Secondary structure (DSSP) — additive, derived from the same ESMFold PDB
-   structure as pLDDT. Fails gracefully (message, not a crash) whenever the
-   mkdssp/dssp binary isn't installed on the server, since that's expected
-   on plenty of machines and never blocks generation. */
+/* Secondary structure (DSSP) — dormant, Phase 5's Structure tab */
 const SS_BAR_COLORS = {
   helix_pct: '#00e5c3',
   sheet_pct: '#3b82f6',
@@ -907,6 +873,7 @@ const SS_BAR_LABELS = {
 
 function renderDssp(ss) {
   const card = document.getElementById('dsspCard');
+  if (!card) return;
   if (!ss) {
     card.style.display = 'none';
     return;
@@ -967,10 +934,7 @@ function renderDssp(ss) {
   card.style.display = 'block';
 }
 
-/* 2D residue-interaction graph (D3 force layout) — raw edges/nodes come from
-   backend/graph_features.py's pdb_to_graph_features(), same PDB structure as
-   the summary metrics above. Purely additive: renderGraphFeatures() already
-   hides the whole card (and this container) whenever graph_features is null. */
+/* 2D residue-interaction graph (D3 force layout) — dormant, Phase 5 (if re-enabled) */
 const RESIDUE_COLORS = {
   K: '#3b82f6', R: '#3b82f6', H: '#60a5fa',
   D: '#ef4444', E: '#f87171',
@@ -991,17 +955,17 @@ const EDGE_COLORS = {
 };
 
 function renderProteinGraph(graphData) {
+  const container = document.getElementById('protein-graph-container');
+  if (!container) return;
   if (!graphData || !graphData.nodes || graphData.nodes.length === 0) {
-    document.getElementById('protein-graph-container').style.display = 'none';
+    container.style.display = 'none';
     return;
   }
   if (typeof d3 === 'undefined') {
-    // CDN unreachable — fail gracefully, summary metrics above still show.
-    document.getElementById('protein-graph-container').style.display = 'none';
+    container.style.display = 'none';
     return;
   }
 
-  const container = document.getElementById('protein-graph-container');
   const svg = d3.select('#protein-graph');
   container.style.display = 'block';
   svg.selectAll('*').remove();
@@ -1012,18 +976,11 @@ function renderProteinGraph(graphData) {
 
   const nodes = graphData.nodes.map(n => ({ ...n }));
 
-  // Backbone (residue i -> i+1) — pure sequence adjacency, synthesized here
-  // rather than sourced from the API. Without this, any residue with zero
-  // interaction edges has nothing anchoring it, so forceCenter pulls it to
-  // the exact center where it overlaps other orphaned nodes — the "missing
-  // residues" artifact. As a real force-link every node is now anchored to
-  // its sequence neighbors, and the chain is traceable N- to C-terminus.
   const backbone = [];
   for (let i = 0; i < nodes.length - 1; i++) {
     backbone.push({ source: i, target: i + 1, weight: 0.05, type: 'backbone' });
   }
 
-  // ca_dist omitted — too dense (near-complete graph), clutters the render.
   const edges = [
     ...(graphData.edges.hbonds || []),
     ...(graphData.edges.ionic || []),
@@ -1045,12 +1002,6 @@ function renderProteinGraph(graphData) {
     .force('collision', d3.forceCollide(18))
     .stop();
 
-  // forceCenter only pulls the *average* position toward center — it does
-  // not stop individual nodes drifting outside the visible canvas, and with
-  // 15-20 residues + repulsion there's not enough room in a 320px-tall box
-  // for that not to happen. Hard-clamp every node back inside the viewBox
-  // (minus a margin for the node radius/label) after every tick so nothing
-  // ends up rendered off-screen with only its edge-stub visible.
   const margin = 20;
   for (let i = 0; i < 200; i++) {
     simulation.tick();
@@ -1060,8 +1011,6 @@ function renderProteinGraph(graphData) {
     }
   }
 
-  // Backbone drawn first (underneath) so the colored interaction edges sit
-  // on top of it.
   svg.append('g').attr('class', 'backbone')
     .selectAll('line')
     .data(backbone)
@@ -1106,13 +1055,15 @@ function renderProteinGraph(graphData) {
     .text(d => `${d.residue} (pos ${d.id + 1})`);
 }
 
+/* PeptideBLEU component bars — dormant, Phase 5's PeptideBLEU tab */
 function renderComponents(comp, plddtScore, helixPct) {
   const card = document.getElementById('componentCard');
   const container = document.getElementById('componentScores');
+  if (!card || !container) return;
   container.innerHTML = '';
 
-  const order = ['ngram_bleu','charge','hydrophobicity','functional_group',
-                  'property_distribution','structural','blosum'];
+  const order = ['ngram_bleu', 'charge', 'hydrophobicity', 'functional_group',
+                  'property_distribution', 'structural', 'blosum'];
 
   order.forEach(key => {
     const val = comp[key] ?? 0;
@@ -1131,8 +1082,6 @@ function renderComponents(comp, plddtScore, helixPct) {
     container.appendChild(row);
   });
 
-  // pLDDT is on a 0-100 scale (not 0-1 like the other components) — shown
-  // separately since it's a structural metric, not a PeptideBLEU component.
   if (plddtScore != null) {
     const row = document.createElement('div');
     row.className = 'comp-row';
@@ -1146,8 +1095,6 @@ function renderComponents(comp, plddtScore, helixPct) {
     container.appendChild(row);
   }
 
-  // Helix % (DSSP) — also 0-100 scale, shown right after pLDDT for the
-  // same reason (structural metric, not a PeptideBLEU component).
   if (helixPct != null) {
     const row = document.createElement('div');
     row.className = 'comp-row';
@@ -1168,17 +1115,6 @@ function scoreClass(s) {
   if (s >= 0.35) return 'score-good';
   if (s >= 0.25) return 'score-ok';
   return 'score-bad';
-}
-
-function setGenerating(on) {
-  const btn = document.getElementById('btnGenerate');
-  if (on) {
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Generating…';
-  } else {
-    btn.disabled = false;
-    btn.innerHTML = '✨ GENERATE';
-  }
 }
 
 /* ── Boot ────────────────────────────────────────────────────────────────── */
