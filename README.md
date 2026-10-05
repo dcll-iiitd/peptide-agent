@@ -249,6 +249,149 @@ data: {"type": "final", "result": {"sequence": "...", "score": 0.39, "components
 
 ---
 
+## LangGraph harness (optional, additive)
+
+A second generation path alongside the `PepForgeAgent` loop above: the same
+backend building blocks (RAG, scoring, rulebook, editing, pLDDT/DSSP/BLAST)
+re-wired as a LangGraph `StateGraph`, adding SQLite session memory, slash
+commands, structured per-position diagnostics, an MCP server, and
+human-in-the-loop researcher approval. The original path
+(`harness=false`/omitted, the default) is completely unchanged by any of
+this — see `.claude/harness.md` for implementation history and known
+limitations.
+
+```
+input_guardrail → rag → generate → score → validate → track ─┬→ edit → score (loop)
+                                                               ├→ score   ("modify" decision)
+                                                               └→ post_hoc → output_guardrail → END
+```
+
+### Install
+
+Already in `requirements.txt` (`langgraph`, `langchain-core`, `langsmith`,
+`langchain-openai`, `langgraph-checkpoint-sqlite`, `fastmcp`) — no separate
+install step beyond the normal `pip install -r requirements.txt`.
+
+### Environment variables (harness-only, all optional)
+
+| Variable | Read by | Description | Example |
+|----------|---------|--------------|---------|
+| `HARNESS_DB_PATH` | `harness/memory.py` | SQLite session-memory file | `data/harness_memory.db` |
+| `LANGCHAIN_TRACING_V2` | LangChain/LangGraph (standard) | Enables LangSmith tracing | `true` |
+| `LANGCHAIN_API_KEY` | LangChain/LangGraph (standard) | LangSmith API key | `lsv2_pt_...` |
+| `LANGCHAIN_PROJECT` | LangChain/LangGraph (standard) | LangSmith project name | `pepforge` |
+
+Without `LANGCHAIN_TRACING_V2`/`LANGCHAIN_API_KEY` set, the harness still
+works identically — tracing and the `trace_url` field in the final SSE
+event are simply absent.
+
+### Running
+
+Same two servers as [above](#running-the-agent) — the harness is reached
+through the existing `backend/server.py`, not a separate process. In the
+frontend, check **"Use LangGraph Harness"** before clicking Generate
+(optionally also "Human-in-the-loop approval"). Or call it directly:
+
+```bash
+curl -N -X POST "http://localhost:8000/generate?harness=true" \
+  -H "Content-Type: application/json" \
+  -d '{"activities":["anti-bacterial"],"length_min":10,"length_max":20,"charge_min":2,"charge_max":5,"hydro_min":30,"hydro_max":50,"threshold":0.35,"max_retries":6}'
+```
+
+SSE event shape is identical to the legacy path (`attempt`/`final`), plus
+one harness-only addition:
+
+```
+data: {"type": "hitl", "data": {"sequence": "...", "score": 0.80, "rulebook": {...}, "iteration": 2, "thread_id": "...", "message": "..."}}
+```
+
+`final.result` additionally carries `edit_stats`
+(`{operation_type: {count, improvements, avg_delta}}`) and `trace_url`
+(LangSmith run link, `null` if tracing isn't configured).
+
+### Human-in-the-loop (HITL)
+
+Set `"hitl_enabled": true` in the `/generate?harness=true` request body.
+When the loop finds a passing candidate, it pauses and emits a `hitl` SSE
+event instead of stopping — generation stays blocked (same open HTTP
+connection) until a decision arrives:
+
+```bash
+curl -X POST http://localhost:8000/resume \
+  -H "Content-Type: application/json" \
+  -d '{"thread_id": "<thread_id from the hitl event>", "decision": {"action": "accept"}}'
+```
+
+| `action` | Effect |
+|----------|--------|
+| `accept` | Stop now — this candidate is the final result |
+| `reject` / `skip` | Keep editing — same as if the loop hadn't paused |
+| `modify` | Replace the candidate with `decision.sequence`, re-score it — if the new sequence passes too, expect another `hitl` pause |
+
+`POST /resume` returns `{"resumed": false}` if nothing is currently paused
+on that `thread_id` (already completed, or `hitl_enabled` was never set).
+
+### Slash commands
+
+```bash
+curl -X POST http://localhost:8000/command \
+  -H "Content-Type: application/json" \
+  -d '{"text": "/score KLLKLLKLLK --ref GIGKFLHSAKKFGKAFVGEIMNS", "thread_id": "my-session"}'
+```
+
+| Command | Usage | Does |
+|---------|-------|------|
+| `/generate` | `/generate [activity] [--length LO-HI] [--charge +LO+HI] [--hydro LO-HI]` | Full harness generation loop |
+| `/score` | `/score SEQUENCE [--ref REFERENCE] [--activity amp]` | PeptideBLEU + descriptors + rulebook, no generation |
+| `/edit` | `/edit SEQUENCE --fix [charge\|hydro\|length\|ngram]` | One structured edit targeting a specific weak component |
+| `/compare` | `/compare SEQUENCE1 SEQUENCE2 [--ref REFERENCE]` | Side-by-side descriptors/BLEU for two sequences |
+| `/explain` | `/explain SEQUENCE` | Plain-English property explanation + rulebook validity |
+| `/history` | `/history [N]` | Last N completed results for `thread_id` (SQLite-backed) |
+
+Reuse the same `thread_id` across calls to keep `/history` meaningful for a
+session.
+
+### MCP server
+
+Exposes the same capabilities as a standalone
+[Model Context Protocol](https://modelcontextprotocol.io) server, so any
+MCP client (Claude Desktop/Code, a custom tool) can drive PepForge without
+HTTP/SSE:
+
+```bash
+python -m harness.mcp_server
+```
+
+Tools: `generate_peptide`, `score_peptide`, `edit_peptide`,
+`explain_peptide`, `compare_peptides`, `novelty_check`, `get_history` —
+same semantics as the slash commands above, with typed parameters instead
+of CLI-style strings.
+
+### Demo walkthrough
+
+```bash
+python harness/demo.py
+```
+
+Runs all of the above once each (generate, LangSmith trace, score, compare,
+history, HITL, MCP, edit statistics) against the live gateway — the
+quickest way to see the whole harness working end-to-end. Each step is
+wrapped so a flaky gateway call prints `[SKIPPED]` and the walkthrough
+continues rather than crashing mid-demo.
+
+### Verification
+
+```bash
+python harness/test_week1.py   # 4 tests — state schema, tools, graph build, full run
+python harness/test_week2.py   # 5 tests — diagnostic, novelty, SQLite memory, LangSmith, /history
+python harness/test_week3.py   # 9 tests — edit operator, slash commands, guardrails, edit stats
+python harness/test_week4.py   # 6 tests — HITL accept/reject/modify, MCP, SSE bridge, full E2E
+```
+
+All make real calls through the configured `GATEWAY_URL` — no mocks.
+
+---
+
 ## Running evaluation
 
 The current, leak-proof pipeline (five stages, in order):
@@ -349,6 +492,21 @@ peptide-agent/
 │   ├── index.html
 │   ├── app.js
 │   └── style.css
+├── harness/                       # LangGraph harness (optional, additive — see below)
+│   ├── state.py                   # AgentState schema
+│   ├── graph.py                   # StateGraph definition (11 nodes)
+│   ├── tools.py                   # @tool-wrapped backend functions
+│   ├── descriptor.py              # Physicochemical descriptor calculator
+│   ├── diagnostic.py              # Actionable rule checker (rule/current/target/fix/positions)
+│   ├── novelty.py                 # Nearest-neighbor novelty (BLAST + FAISS fallback)
+│   ├── edit_operator.py           # Structured LLM edit instructions
+│   ├── commands.py                # Slash command parser (/generate /score /edit ...)
+│   ├── memory.py                  # SQLite session memory (SqliteSaver)
+│   ├── hitl.py                    # Human-in-the-loop interrupt/resume
+│   ├── mcp_server.py              # FastMCP server exposing 7 tools
+│   ├── sse_bridge.py              # LangGraph ↔ /generate SSE bridge
+│   ├── demo.py                    # Live demo walkthrough
+│   └── test_week{1,2,3,4}.py      # Live integration test suites
 ├── eval/
 │   ├── cluster_dataset.py        # Leak-proofing step 1 (CD-HIT)
 │   ├── split_pools.py            # Leak-proofing step 2 (pool A/B)
@@ -377,6 +535,9 @@ peptide-agent/
 | RAG examples never show up | `data/peptides.csv` or the FAISS index missing — run `python -m backend.rag.build_index` |
 | Novelty/BLAST fields always null | `makeblastdb`/`blastp` not on `PATH`, or `python backend/blast_db_builder.py` was never run |
 | `eval/cluster_dataset.py` fails to find cd-hit | Install `cd-hit` (`apt-get install cd-hit` / `conda install -c bioconda cd-hit`), or run it inside WSL on Windows |
+| `/generate?harness=true` seems to hang | `hitl_enabled: true` was set and a passing candidate was found — not a bug, check for a `hitl` SSE event and call `POST /resume` |
+| `trace_url` always `null` in harness results | `LANGCHAIN_TRACING_V2`/`LANGCHAIN_API_KEY` not set in `.env` — see [harness env vars](#environment-variables-harness-only-all-optional) |
+| `POST /resume` returns `{"resumed": false}` | Nothing is currently paused on that `thread_id` — confirm it's from the most recent `hitl` event, not a stale one |
 
 ---
 
