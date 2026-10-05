@@ -105,6 +105,16 @@ class AgentState(TypedDict):
     helix_pct: Optional[float]
     novelty_score: Optional[float]
     closest_match: Optional[str]
+    # Frontend redesign Phase 2 decision 2 — close the harness/legacy
+    # Structure+Novelty field gap documented in frontend/AUDIT.md Q17-19.
+    # novelty_label stays None for now (see sse_bridge.py note): wiring
+    # blast_novelty_tool into the graph is a larger architectural change,
+    # out of scope here.
+    pdb_string: Optional[str]
+    plddt_confidence: Optional[str]
+    sheet_pct: Optional[float]
+    coil_pct: Optional[float]
+    novelty_label: Optional[str]
 
     # Control flow
     early_stop: bool
@@ -161,6 +171,11 @@ def create_initial_state(**overrides) -> AgentState:
         "helix_pct": None,
         "novelty_score": None,
         "closest_match": None,
+        "pdb_string": None,
+        "plddt_confidence": None,
+        "sheet_pct": None,
+        "coil_pct": None,
+        "novelty_label": None,
         "early_stop": False,
         "error": None,
         "status": "pending",

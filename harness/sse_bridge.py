@@ -59,6 +59,27 @@ def _weakest_component(components: dict) -> Optional[str]:
     return min(components, key=components.get) if components else None
 
 
+def _tracing_context():
+    """A tracing_v2_enabled() context manager if LangSmith is actually
+    configured (same gating as harness/test_week2.py's test_langsmith_trace),
+    else a no-op nullcontext — so callers can always do `with ctx as tracer:`
+    and just check `tracer is not None` rather than branching on env vars
+    themselves.
+    """
+    import os
+    from contextlib import nullcontext
+
+    has_key = bool(os.environ.get("LANGCHAIN_API_KEY"))
+    tracing_on = os.environ.get("LANGCHAIN_TRACING_V2", "").lower() == "true"
+    if not (has_key and tracing_on):
+        return nullcontext(None)
+
+    from langchain_core.tracers.context import tracing_v2_enabled
+
+    project = os.environ.get("LANGCHAIN_PROJECT", "pepforge")
+    return tracing_v2_enabled(project_name=project)
+
+
 def _build_attempt_event(state: dict, last_score: float) -> dict:
     diagnostic = state.get("current_diagnostic")
     score = state.get("current_score", 0.0)
@@ -74,6 +95,11 @@ def _build_attempt_event(state: dict, last_score: float) -> dict:
         "status": "pass" if passed else ("fail" if state.get("current_sequence") else "error"),
         "passed": passed,
         "issues": [v["fix"] for v in diagnostic.violations] if diagnostic else [],
+        # Full structured violations (rule/current/target/excess/fix/positions)
+        # from harness/diagnostic.py — richer than the legacy path's plain
+        # issue strings, for the frontend's dedicated violations card
+        # (Week 4 task 5). Absent entirely on the legacy harness=false path.
+        "violations": diagnostic.violations if diagnostic else [],
         "components": state.get("current_components", {}),
         "mode": last_edit_op.operation if last_edit_op else "generate",
         "weakest": _weakest_component(state.get("current_components", {})),
@@ -116,8 +142,31 @@ def _build_final_event(state: dict, elapsed: float) -> dict:
             "rag_sequences": [ex["sequence"] for ex in rag_examples[:3]],
             "plddt_score": state.get("plddt_score"),
             "helix_pct": state.get("helix_pct"),
+            # Frontend redesign Phase 2 decision 2 (frontend_phase2_decisions.md)
+            # — closes the harness/legacy Structure+Novelty field gap
+            # documented in frontend/AUDIT.md Q17-19. novelty_score/
+            # closest_match/novelty_label stay None — harness/graph.py's
+            # post_hoc_node never calls blast_novelty_tool, intentionally
+            # out of scope here; the frontend shows a graceful "unavailable"
+            # state for novelty in harness mode instead.
+            "plddt_confidence": state.get("plddt_confidence"),
+            "pdb_string": state.get("pdb_string"),
+            "sheet_pct": state.get("sheet_pct"),
+            "coil_pct": state.get("coil_pct"),
+            "novelty_score": state.get("novelty_score"),
+            "closest_match": state.get("closest_match"),
+            "novelty_label": state.get("novelty_label"),
             "status": state.get("status", "unknown"),
             "thread_id": state.get("_thread_id"),
+            # {operation_type: {count, improvements, avg_delta}} from
+            # track_best_node (Week 3 task 5) — Week 4 task 5's edit
+            # statistics card. Empty on iteration-1-only runs (no edits yet).
+            "edit_stats": state.get("edit_stats", {}),
+            # LangSmith run URL (Week 4 task 5's "View full trace" link) —
+            # None when LANGCHAIN_TRACING_V2/LANGCHAIN_API_KEY aren't
+            # configured, or on the legacy harness=false path (no LangGraph
+            # run at all there).
+            "trace_url": state.get("_trace_url"),
         },
     }
 
@@ -164,42 +213,55 @@ async def generate_harness_stream(task_overrides: dict, thread_id: Optional[str]
         current_state = dict(initial_state)
         start = time.monotonic()
         try:
-            while True:
-                interrupted = False
-                for update in app.stream(stream_input, config=run_config):
-                    if "__interrupt__" in update:
-                        interrupted = True
-                        # thread_id has to ride along in the payload itself —
-                        # SSE is one-way, so POST /resume is the client's only
-                        # path back, and it needs thread_id to target the
-                        # right paused run. harness/hitl.py's own payload
-                        # (built with no knowledge of HTTP/thread_id) doesn't
-                        # include it, so it's added here at the bridge layer.
-                        emit(
-                            {
-                                "type": "hitl",
-                                "data": {**update["__interrupt__"][0].value, "thread_id": thread_id},
-                            }
-                        )
-                        continue
-                    for node_name, node_output in update.items():
-                        if node_output:
-                            current_state.update(node_output)
-                        if node_name == "track":
-                            event = _build_attempt_event(current_state, last_score)
-                            last_score = event["score"]
-                            emit(event)
+            # Entered/exited here (inside the executor thread, spanning every
+            # HITL pause/resume lap) rather than around the whole coroutine —
+            # tracing_v2_enabled() sets a contextvar, and plain
+            # loop.run_in_executor() does not propagate the caller's
+            # contextvars into the executor thread the way asyncio.to_thread
+            # does, so entering it on the event-loop side would silently not
+            # apply to any of the actual graph execution happening here.
+            with _tracing_context() as tracer:
+                while True:
+                    interrupted = False
+                    for update in app.stream(stream_input, config=run_config):
+                        if "__interrupt__" in update:
+                            interrupted = True
+                            # thread_id has to ride along in the payload itself —
+                            # SSE is one-way, so POST /resume is the client's only
+                            # path back, and it needs thread_id to target the
+                            # right paused run. harness/hitl.py's own payload
+                            # (built with no knowledge of HTTP/thread_id) doesn't
+                            # include it, so it's added here at the bridge layer.
+                            emit(
+                                {
+                                    "type": "hitl",
+                                    "data": {**update["__interrupt__"][0].value, "thread_id": thread_id},
+                                }
+                            )
+                            continue
+                        for node_name, node_output in update.items():
+                            if node_output:
+                                current_state.update(node_output)
+                            if node_name == "track":
+                                event = _build_attempt_event(current_state, last_score)
+                                last_score = event["score"]
+                                emit(event)
 
-                if not interrupted:
-                    break
+                    if not interrupted:
+                        break
 
-                # Block this executor thread (never the asyncio loop) until
-                # POST /resume pushes a decision for this thread_id.
-                q = _hitl_decision_queues.setdefault(thread_id, queue.Queue())
-                decision = q.get()
-                stream_input = Command(resume=decision)
+                    # Block this executor thread (never the asyncio loop) until
+                    # POST /resume pushes a decision for this thread_id.
+                    q = _hitl_decision_queues.setdefault(thread_id, queue.Queue())
+                    decision = q.get()
+                    stream_input = Command(resume=decision)
 
-            current_state["_thread_id"] = thread_id
+                current_state["_thread_id"] = thread_id
+                try:
+                    current_state["_trace_url"] = tracer.get_run_url() if tracer else None
+                except Exception:
+                    current_state["_trace_url"] = None
+
             return _build_final_event(current_state, time.monotonic() - start)
         finally:
             # A plain sentinel object, not run through emit()/json.dumps —

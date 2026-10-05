@@ -478,22 +478,38 @@ def post_hoc_node(state: AgentState) -> dict:
     plddt_score = plddt_result.get("mean_plddt")
 
     helix_pct = None
+    sheet_pct = None
+    coil_pct = None
     pdb = plddt_result.get("pdb")
     if pdb:
         dssp_result = dssp_tool.invoke({"pdb_string": pdb})
         helix_pct = dssp_result.get("helix_pct")
+        sheet_pct = dssp_result.get("sheet_pct")
+        coil_pct = dssp_result.get("coil_pct")
 
     status = "complete" if (state["best_passing"] is not None) else "failed"
 
     return {
         "plddt_score": plddt_score,
         "helix_pct": helix_pct,
+        "sheet_pct": sheet_pct,
+        "coil_pct": coil_pct,
+        # esmfold_tool's actual keys are "pdb"/"confidence" (verified against
+        # backend/esmfold_scorer.py's get_plddt() return dict directly) — not
+        # "pdb_string"/"confidence_label" as frontend_phase2_decisions.md's
+        # sketch named them. Stored here under the new state field names the
+        # plan specifies; only the *source* keys read from plddt_result
+        # needed correcting.
+        "pdb_string": pdb,
+        "plddt_confidence": plddt_result.get("confidence"),
         # blast_scorer.assess_novelty() has no closest_match field — leaving
-        # novelty_score/closest_match as None/None here rather than the
-        # tools_spec.md draft's (stale) claim that one exists. Week 2's
-        # novelty.py component is where this gets built out properly.
+        # novelty_score/closest_match/novelty_label as None here rather than
+        # the tools_spec.md draft's (stale) claim that one exists. Wiring
+        # blast_novelty_tool into the graph is a larger architectural change
+        # than this Phase 2 decision calls for — see frontend_phase2_decisions.md.
         "novelty_score": None,
         "closest_match": None,
+        "novelty_label": None,
         "status": status,
     }
 
