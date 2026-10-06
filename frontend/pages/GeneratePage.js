@@ -14,7 +14,7 @@ import { resetProgressTimeline, setStepState } from '../components/AgentProgress
 import { showLoading, hideLoading } from '../components/LoadingState.js';
 import { showErrorCard, hideErrorCard } from '../components/ErrorState.js';
 import { showHitlPanel, hideHitlPanel } from '../components/HITLPanel.js';
-import { renderHeroCard, renderTraceLink } from '../components/CandidateCard.js';
+import { renderHeroCard } from '../components/CandidateCard.js';
 import { renderPropertiesTab, fmtCharge } from '../components/PropertyCard.js';
 import { renderPeptideBleuTab } from '../components/PeptideBLEU.js';
 import { renderStructureTab } from '../components/StructureViewer.js';
@@ -481,7 +481,6 @@ function showBestCandidate(result) {
   currentResult = r;
 
   renderHeroCard(r);
-  renderTraceLink(r.trace_url);
 
   renderOverviewTab(r);
   renderPropertiesTab(r);
@@ -540,7 +539,7 @@ function renderTraceTab(r) {
   let html = '';
 
   if (r.trace_url) {
-    html += `<p style="margin-bottom:12px"><a href="${r.trace_url}" target="_blank" rel="noopener" class="trace-link" style="margin-left:0">View full LangSmith trace →</a></p>`;
+    html += `<p style="margin-bottom:12px"><a href="${r.trace_url}" target="_blank" rel="noopener" class="trace-link" style="margin-left:0">View in LangSmith →</a></p>`;
   }
 
   html += '<div class="tab-section-label">ATTEMPT HISTORY</div>';

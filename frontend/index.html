@@ -242,15 +242,18 @@ e.g. Generate an antibacterial peptide with 15–20 residues, charge +2 to +5, h
           <div class="result-card" id="bestCandidateCard" style="display:none">
             <div class="result-card-header">
               <span class="result-icon">🏆</span> BEST CANDIDATE
-              <a id="traceLink" class="trace-link" href="#" target="_blank" rel="noopener" style="display:none">View full trace →</a>
             </div>
             <div class="hero-sequence-row">
               <div class="result-sequence" id="resultSequence"></div>
-              <button class="btn-chip" onclick="copySequence()">Copy</button>
             </div>
             <div class="hero-subtitle" id="heroSubtitle"></div>
+            <div class="hero-divider"></div>
             <div class="hero-metrics" id="heroMetrics"></div>
+            <div class="hero-divider"></div>
+            <div class="hero-stats" id="heroStats"></div>
+            <div class="hero-divider"></div>
             <div class="best-candidate-actions">
+              <button class="btn-chip" onclick="copySequence()">Copy</button>
               <button class="btn-chip" onclick="navigateTo('analyze')">Analyze</button>
               <button class="btn-chip" onclick="navigateTo('compare')">Compare</button>
               <button class="btn-chip" onclick="refineCandidate()">Refine</button>

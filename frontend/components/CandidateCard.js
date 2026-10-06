@@ -26,6 +26,12 @@ export function renderHeroMetricsHtml(r) {
   return rows.join('');
 }
 
+export function renderHeroStatsHtml(r) {
+  const iterStr = r.iterations ?? '–';
+  const timeStr = r.time_seconds != null ? r.time_seconds.toFixed(1) + 's' : '–';
+  return `<span>Iterations: ${iterStr}</span><span class="hero-stats-sep">|</span><span>Time: ${timeStr}</span>`;
+}
+
 export function renderHeroCard(r) {
   const seqEl = document.getElementById('resultSequence');
   seqEl.textContent = r.sequence || 'No sequence generated';
@@ -36,12 +42,5 @@ export function renderHeroCard(r) {
   document.getElementById('heroSubtitle').textContent =
     `${lengthAa} amino acids${r.activity ? ' · ' + r.activity : ''}`;
   document.getElementById('heroMetrics').innerHTML = renderHeroMetricsHtml(r);
-}
-
-export function renderTraceLink(url) {
-  const link = document.getElementById('traceLink');
-  if (!link) return;
-  if (!url) { link.style.display = 'none'; return; }
-  link.href = url;
-  link.style.display = 'inline-block';
+  document.getElementById('heroStats').innerHTML = renderHeroStatsHtml(r);
 }
