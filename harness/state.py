@@ -115,6 +115,10 @@ class AgentState(TypedDict):
     sheet_pct: Optional[float]
     coil_pct: Optional[float]
     novelty_label: Optional[str]
+    # Decision 8 — per-residue secondary structure string (e.g. "HHHCCSS...")
+    # for the Structure tab's residue strip. Confirmed present on dssp_tool's
+    # return dict (backend/dssp_scorer.py) before adding this field.
+    ss_string: Optional[str]
 
     # Control flow
     early_stop: bool
@@ -176,6 +180,7 @@ def create_initial_state(**overrides) -> AgentState:
         "sheet_pct": None,
         "coil_pct": None,
         "novelty_label": None,
+        "ss_string": None,
         "early_stop": False,
         "error": None,
         "status": "pending",

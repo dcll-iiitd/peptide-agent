@@ -480,12 +480,18 @@ def post_hoc_node(state: AgentState) -> dict:
     helix_pct = None
     sheet_pct = None
     coil_pct = None
+    ss_string = None
     pdb = plddt_result.get("pdb")
     if pdb:
         dssp_result = dssp_tool.invoke({"pdb_string": pdb})
         helix_pct = dssp_result.get("helix_pct")
         sheet_pct = dssp_result.get("sheet_pct")
         coil_pct = dssp_result.get("coil_pct")
+        # Decision 8 (frontend_phase2_decisions.md) — verified dssp_tool
+        # actually returns this (backend/dssp_scorer.py's
+        # _compute_ss_percentages() spreads it into the result dict) before
+        # adding it here, per that decision's explicit verify-first step.
+        ss_string = dssp_result.get("ss_string")
 
     status = "complete" if (state["best_passing"] is not None) else "failed"
 
@@ -494,6 +500,7 @@ def post_hoc_node(state: AgentState) -> dict:
         "helix_pct": helix_pct,
         "sheet_pct": sheet_pct,
         "coil_pct": coil_pct,
+        "ss_string": ss_string,
         # esmfold_tool's actual keys are "pdb"/"confidence" (verified against
         # backend/esmfold_scorer.py's get_plddt() return dict directly) — not
         # "pdb_string"/"confidence_label" as frontend_phase2_decisions.md's

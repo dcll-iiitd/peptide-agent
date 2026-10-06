@@ -30,6 +30,7 @@ import json
 import queue
 import time
 import uuid
+from dataclasses import asdict
 from typing import AsyncIterator, Optional
 
 from harness.graph import build_graph
@@ -104,6 +105,10 @@ def _build_attempt_event(state: dict, last_score: float) -> dict:
         "mode": last_edit_op.operation if last_edit_op else "generate",
         "weakest": _weakest_component(state.get("current_components", {})),
         "delta_score": score - last_score,
+        # Decision 7 (frontend_phase2_decisions.md) — full edit-operation
+        # detail for the Trace tab's Before/Edit/After display. None on the
+        # first generation attempt (no edit has happened yet).
+        "edit_op": asdict(last_edit_op) if last_edit_op else None,
     }
 
 
@@ -128,6 +133,11 @@ def _build_final_event(state: dict, elapsed: float) -> dict:
 
     rag_examples = state.get("rag_examples", [])
 
+    # Decision 9 (frontend_phase2_decisions.md) — PeptideDescriptors for the
+    # Properties tab. Already computed per-lap by score_node and stored on
+    # every CandidateResult; just never read into the final event before.
+    descriptors = best.descriptors if (best and best.descriptors) else None
+
     return {
         "type": "final",
         "result": {
@@ -136,6 +146,16 @@ def _build_final_event(state: dict, elapsed: float) -> dict:
             "rulebook_score": rulebook_score,
             "reference_used": reference_used,
             "components": components,
+            "descriptors": {
+                "length": descriptors.length,
+                "net_charge": descriptors.net_charge,
+                "hydro_pct": descriptors.hydro_pct,
+                "gravy": descriptors.gravy,
+                "aromaticity": descriptors.aromaticity,
+                "mol_weight": descriptors.mol_weight,
+                "charge_class": descriptors.charge_class,
+                "length_class": descriptors.length_class,
+            } if descriptors else None,
             "iterations": state.get("iteration", 0),
             "time_seconds": elapsed,
             "rag_examples_used": len(rag_examples),
@@ -153,6 +173,10 @@ def _build_final_event(state: dict, elapsed: float) -> dict:
             "pdb_string": state.get("pdb_string"),
             "sheet_pct": state.get("sheet_pct"),
             "coil_pct": state.get("coil_pct"),
+            # Decision 8 — per-residue secondary structure string for the
+            # Structure tab's residue strip (confirmed present on
+            # dssp_tool's return dict before adding this).
+            "ss_string": state.get("ss_string"),
             "novelty_score": state.get("novelty_score"),
             "closest_match": state.get("closest_match"),
             "novelty_label": state.get("novelty_label"),
