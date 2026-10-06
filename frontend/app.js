@@ -26,6 +26,15 @@ let commandThreadId = null;      // stable thread_id reused across /command call
 let isGenerating = false;
 let currentSpec = null;          // last parsed/advanced-panel spec used for the active run
 let lastRunningStepKey = null;   // which progress step was "running" when an error arrived
+let attemptHistory = [];         // all attempt events for the active run (Trace tab)
+let currentResult = null;        // last normalize Result() output (tab renderers + residue inspection)
+
+const AA_NAMES = {
+  A: 'Alanine', R: 'Arginine', N: 'Asparagine', D: 'Aspartate', C: 'Cysteine',
+  E: 'Glutamate', Q: 'Glutamine', G: 'Glycine', H: 'Histidine', I: 'Isoleucine',
+  L: 'Leucine', K: 'Lysine', M: 'Methionine', F: 'Phenylalanine', P: 'Proline',
+  S: 'Serine', T: 'Threonine', W: 'Tryptophan', Y: 'Tyrosine', V: 'Valine',
+};
 
 /* ── Init ────────────────────────────────────────────────────────────────── */
 function init() {
@@ -47,6 +56,7 @@ function navigateTo(view) {
   document.querySelectorAll('.view').forEach(el => {
     el.classList.toggle('active', el.dataset.view === view);
   });
+  if (view === 'history') renderHistoryView();
   if (window.innerWidth <= 768) {
     document.getElementById('sidebar').classList.remove('drawer-open');
   }
@@ -59,9 +69,12 @@ function newExperiment() {
   document.getElementById('generateEmpty').style.display = '';
   document.getElementById('genInput').value = '';
   document.getElementById('advancedPanel').style.display = 'none';
+  document.getElementById('resultTabsCard').style.display = 'none';
   document.querySelector('.view-placeholder-template')?.remove();
   hideHitlPanel();
   currentSpec = null;
+  currentResult = null;
+  attemptHistory = [];
 }
 
 function toggleSidebarCollapse() {
@@ -182,9 +195,60 @@ function renderExperimentsList() {
 }
 
 function loadExperiment(threadId) {
-  // Phase 5 loads the full stored result for this thread_id into the
-  // result view. For now just surfaces the History placeholder.
   navigateTo('history');
+  const experiments = loadExperiments();
+  const index = experiments.findIndex(e => e.thread_id === threadId);
+  if (index >= 0) showHistoryDetail(index);
+}
+
+/* ── History view (Phase 7) ────────────────────────────────────────────────
+   Only a thin per-run summary is ever persisted (Decision 3's
+   {thread_id, sequence, score, activity, timestamp, status}) — there is no
+   stored PDB/components/trace, so "detail" here is honestly limited to
+   that summary, not a full tabbed result restore. */
+function renderHistoryView() {
+  const el = document.getElementById('view-history');
+  const experiments = loadExperiments();
+  if (experiments.length === 0) {
+    el.innerHTML = `<div class="view-placeholder"><h2>🕘 History</h2><p>No experiments yet. Generate your first peptide.</p></div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="history-wrapper">
+      <h2 class="history-heading">🕘 History</h2>
+      <div class="experiments-list history-list" id="historyList"></div>
+      <div id="historyDetail" class="history-detail"></div>
+    </div>
+  `;
+  const list = document.getElementById('historyList');
+  list.innerHTML = experiments.slice().reverse().map((exp, i) => {
+    const index = experiments.length - 1 - i;
+    return `
+    <div class="experiment-item history-item" onclick="showHistoryDetail(${index})">
+      <span class="experiment-seq">${exp.sequence || '(no sequence)'}</span>
+      <span class="experiment-meta">${exp.activity || '(general)'} · score ${exp.score != null ? exp.score.toFixed(4) : '–'} · ${exp.status || 'unknown'} · ${new Date(exp.timestamp).toLocaleString()}</span>
+    </div>`;
+  }).join('');
+}
+
+function showHistoryDetail(index) {
+  const experiments = loadExperiments();
+  const exp = experiments[index];
+  const el = document.getElementById('historyDetail');
+  if (!exp || !el) return;
+  el.innerHTML = `
+    <div class="result-card">
+      <div class="result-card-header"><span class="result-icon">📄</span> EXPERIMENT DETAIL</div>
+      <div class="result-sequence">${exp.sequence || '(no sequence)'}</div>
+      <div class="spec-grid" style="margin-top:10px">
+        <div class="spec-row"><span class="spec-label">Activity</span><span class="spec-value">${exp.activity || '(general)'}</span></div>
+        <div class="spec-row"><span class="spec-label">Score</span><span class="spec-value">${exp.score != null ? exp.score.toFixed(4) : '–'}</span></div>
+        <div class="spec-row"><span class="spec-label">Status</span><span class="spec-value">${exp.status || 'unknown'}</span></div>
+        <div class="spec-row"><span class="spec-label">Date</span><span class="spec-value">${new Date(exp.timestamp).toLocaleString()}</span></div>
+      </div>
+      <p class="tab-hint">Only a summary is stored for past experiments — full result detail (tabs, structure, trace) is only available for the most recently completed run this session.</p>
+    </div>
+  `;
 }
 
 /* ── Health check ────────────────────────────────────────────────────────── */
@@ -328,6 +392,32 @@ function parseNaturalLanguage(text) {
   return spec;
 }
 
+/* ── Client-side input validation (Phase 7) ───────────────────────────────
+   Mirrors harness/guardrails.py's input_guardrail() rules exactly, so a
+   malformed spec shows the specific violation message immediately rather
+   than round-tripping to the backend — which currently has no way to
+   surface that message anyway (input_guardrail's "error" string never
+   reaches the SSE final event; adding it would mean touching
+   harness/sse_bridge.py, out of scope for this frontend-only phase). */
+function validateSpecClientSide(spec) {
+  const errors = [];
+  if (spec.activity && !ALL_ACTIVITIES.includes(spec.activity)) {
+    errors.push(`activity '${spec.activity}' is not one of the 13 valid classes`);
+  }
+  if (!(spec.length_min < spec.length_max)) errors.push(`length_min (${spec.length_min}) must be < length_max (${spec.length_max})`);
+  if (!(spec.charge_min <= spec.charge_max)) errors.push(`charge_min (${spec.charge_min}) must be <= charge_max (${spec.charge_max})`);
+  if (!(spec.hydro_min < spec.hydro_max)) errors.push(`hydro_min (${spec.hydro_min}) must be < hydro_max (${spec.hydro_max})`);
+  if (!(spec.length_min >= 1)) errors.push(`length_min (${spec.length_min}) must be >= 1`);
+  if (!(spec.length_max <= 200)) errors.push(`length_max (${spec.length_max}) must be <= 200`);
+  if (!(spec.charge_min >= -20)) errors.push(`charge_min (${spec.charge_min}) must be >= -20`);
+  if (!(spec.charge_max <= 20)) errors.push(`charge_max (${spec.charge_max}) must be <= 20`);
+  if (!(spec.hydro_min >= 0)) errors.push(`hydro_min (${spec.hydro_min}) must be >= 0`);
+  if (!(spec.hydro_max <= 100)) errors.push(`hydro_max (${spec.hydro_max}) must be <= 100`);
+  if (!(spec.threshold >= 0.0 && spec.threshold <= 1.0)) errors.push(`threshold (${spec.threshold}) must be between 0.0 and 1.0`);
+  if (!(spec.max_retries >= 1 && spec.max_retries <= 10)) errors.push(`max_retries (${spec.max_retries}) must be between 1 and 10`);
+  return errors;
+}
+
 /* ── Generation (Phase 4) ─────────────────────────────────────────────────── */
 function startGeneration() {
   if (isGenerating) return;
@@ -356,6 +446,13 @@ function startGeneration() {
     spec = parsed;
   }
 
+  const violations = validateSpecClientSide(spec);
+  if (violations.length > 0) {
+    openAdvancedPanel();
+    alert('Please fix the following before generating:\n\n' + violations.join('\n'));
+    return;
+  }
+
   currentSpec = spec;
   showParsedSpecCard(spec);
   runGeneration(spec);
@@ -381,8 +478,12 @@ async function runGeneration(spec) {
   document.getElementById('generateActive').style.display = 'block';
   document.getElementById('commandResultCard').style.display = 'none';
   document.getElementById('bestCandidateCard').style.display = 'none';
+  document.getElementById('resultTabsCard').style.display = 'none';
   document.getElementById('errorCard').style.display = 'none';
   hideHitlPanel();
+  attemptHistory = [];
+  currentResult = null;
+  document.getElementById('progressHeader').style.display = 'flex';
   resetProgressTimeline();
   setStepState('input_guardrail', 'running');
   lastRunningStepKey = 'input_guardrail';
@@ -434,8 +535,12 @@ async function runGeneration(spec) {
       }
     }
   } catch (err) {
+    document.getElementById('progressHeader').style.display = 'none';
     setStepState(lastRunningStepKey || 'input_guardrail', 'failed');
-    showErrorCard(String(err));
+    showErrorCard('Could not reach the PepForge server. Make sure the backend is running.', {
+      technical: String((err && err.stack) || err),
+      retry: true,
+    });
   } finally {
     isGenerating = false;
   }
@@ -444,6 +549,7 @@ async function runGeneration(spec) {
 function handleGenerationEvent(evt, attemptCount) {
   if (evt.type === 'attempt') {
     attemptCount++;
+    attemptHistory.push(evt);
     if (attemptCount === 1) {
       ['input_guardrail', 'rag_retrieval', 'reference_selection', 'generation', 'scoring', 'validation']
         .forEach(k => setStepState(k, 'completed'));
@@ -454,14 +560,24 @@ function handleGenerationEvent(evt, attemptCount) {
     showHitlPanel(evt.data);
   } else if (evt.type === 'final') {
     hideHitlPanel();
+    document.getElementById('progressHeader').style.display = 'none';
     setStepState('refinement', 'completed');
     setStepState('post_hoc', 'completed');
     setStepState('output_guardrail', 'completed');
     showBestCandidate(evt.result);
     recordExperiment(evt.result, currentSpec);
   } else if (evt.type === 'error') {
+    // The overwhelmingly common real-world cause of a harness "error" SSE
+    // event in this project is the LLM gateway tunnel dying mid-run (see
+    // CLAUDE.md's failure-modes table) — using that as the primary
+    // user-facing message rather than the raw exception, which goes under
+    // "Technical details" instead (never shown raw in the primary UI).
+    document.getElementById('progressHeader').style.display = 'none';
     setStepState(lastRunningStepKey || 'generation', 'failed');
-    showErrorCard(evt.message || 'Generation failed.');
+    showErrorCard('PepForge could not reach the model. Your experiment settings are preserved.', {
+      technical: `${evt.message || ''}\n\n${evt.traceback || ''}`.trim(),
+      retry: true,
+    });
   }
   return attemptCount;
 }
@@ -534,31 +650,410 @@ function setStepState(key, state) {
   else { icon.textContent = '○'; }
 }
 
-/* ── Best candidate card (Phase 4 — minimal; full tabs are Phase 5) ──────── */
-function showBestCandidate(result) {
-  const card = document.getElementById('bestCandidateCard');
-  const seqEl = document.getElementById('resultSequence');
-  const metaEl = document.getElementById('bestCandidateMeta');
+/* ── Result normalization (Phase 5) ───────────────────────────────────────
+   Legacy and harness final events have genuinely different shapes
+   (frontend/AUDIT.md Q17-19, Decisions 2/7/8/9) — legacy nests
+   secondary_structure/blast_similarity dicts and names the PDB field
+   "plddt_pdb"; harness has flat sheet_pct/coil_pct/ss_string/pdb_string
+   fields and a possibly-partial `descriptors` (full on harness, rulebook-
+   derived partial on legacy, per Decision 9). This normalizes both into one
+   shape so the tab renderers below never branch on which path produced
+   the result. */
+function normalizeResult(result) {
+  const ss = result.secondary_structure || null;      // legacy only
+  const blast = result.blast_similarity || null;       // legacy only
 
-  seqEl.textContent = result.sequence || 'No sequence generated';
-  const displayScore = result.score != null ? result.score : result.rulebook_score;
-  seqEl.className = 'result-sequence' + (displayScore != null ? ' ' + scoreClass(displayScore) : '');
+  let descriptors = result.descriptors || null;        // harness, Decision 9
+  let descriptorsPartial = false;
+  if (!descriptors && result.rulebook) {
+    descriptors = {
+      length: result.rulebook.length,
+      net_charge: result.rulebook.net_charge,
+      hydro_pct: result.rulebook.hydro_percent ?? result.rulebook.hydrophobicity,
+      charge_class: result.rulebook.charge_class,
+      length_class: result.rulebook.length_class,
+      gravy: null, aromaticity: null, mol_weight: null,
+    };
+    descriptorsPartial = true;
+  }
 
-  const parts = [];
-  if (result.score != null) parts.push(`PeptideBLEU <b>${result.score.toFixed(4)}</b>`);
-  if (result.rulebook_score != null) parts.push(`Rulebook <b>${result.rulebook_score.toFixed(2)}</b>`);
-  parts.push(`Status <b>${result.status === 'complete' ? 'Passed' : (result.status || 'unknown')}</b>`);
-  if (result.iterations != null) parts.push(`Iterations <b>${result.iterations}</b>`);
-  if (result.time_seconds != null) parts.push(`Time <b>${result.time_seconds.toFixed(1)}s</b>`);
-  metaEl.innerHTML = parts.map(p => `<span>${p}</span>`).join('');
+  return {
+    sequence: result.sequence || '',
+    score: result.score,
+    rulebook_score: result.rulebook_score,
+    reference_used: result.reference_used,
+    components: result.components || {},
+    iterations: result.iterations,
+    time_seconds: result.time_seconds,
+    rag_examples_used: result.rag_examples_used,
+    rag_sequences: result.rag_sequences || [],
+    status: result.status,
+    thread_id: result.thread_id,
+    edit_stats: result.edit_stats || {},
+    trace_url: result.trace_url || null,
 
-  renderTraceLink(result.trace_url);
-  card.style.display = 'block';
+    descriptors,
+    descriptors_partial: descriptorsPartial,
+
+    plddt_score: result.plddt_score,
+    plddt_confidence: result.plddt_confidence || null,
+    plddt_interp: result.plddt_interp || null,
+    pdb_string: result.plddt_pdb || result.pdb_string || null,
+
+    helix_pct: ss ? ss.helix_pct : result.helix_pct,
+    sheet_pct: ss ? ss.sheet_pct : result.sheet_pct,
+    coil_pct: ss ? ss.coil_pct : result.coil_pct,
+    ss_string: ss ? ss.ss_string : result.ss_string,
+    dssp_available: ss ? ss.dssp_available : (result.helix_pct != null),
+    dssp_interp: ss ? ss.interpretation : null,
+
+    novelty_score: blast ? blast.similarity_score : result.novelty_score,
+    novelty_label: blast ? blast.novelty_label : result.novelty_label,
+    novelty_interp: blast ? blast.interpretation : null,
+    novelty_available: blast ? !!blast.blast_available : (result.novelty_score != null),
+    closest_match: result.closest_match || null,
+
+    activity: (currentSpec && currentSpec.activity) || '',
+  };
 }
 
-function showErrorCard(message) {
-  document.getElementById('errorMessage').textContent = message;
+/* ── Best candidate hero card + result tabs (Phase 5) ─────────────────────── */
+function showBestCandidate(result) {
+  const r = normalizeResult(result);
+  currentResult = r;
+
+  const seqEl = document.getElementById('resultSequence');
+  seqEl.textContent = r.sequence || 'No sequence generated';
+  const displayScore = r.score != null ? r.score : r.rulebook_score;
+  seqEl.className = 'result-sequence' + (displayScore != null ? ' ' + scoreClass(displayScore) : '');
+
+  const lengthAa = (r.descriptors && r.descriptors.length != null) ? r.descriptors.length : r.sequence.length;
+  document.getElementById('heroSubtitle').textContent =
+    `${lengthAa} amino acids${r.activity ? ' · ' + r.activity : ''}`;
+  document.getElementById('heroMetrics').innerHTML = renderHeroMetricsHtml(r);
+  renderTraceLink(r.trace_url);
+
+  renderOverviewTab(r);
+  renderPropertiesTab(r);
+  renderPeptideBleuTab(r);
+  renderStructureTab(r);
+  renderNoveltyTab(r);
+  renderTraceTab(r);
+
+  switchResultTab('overview');
+  document.getElementById('bestCandidateCard').style.display = 'block';
+  document.getElementById('resultTabsCard').style.display = 'block';
+}
+
+function renderHeroMetricsHtml(r) {
+  const rows = [];
+  if (r.score != null) {
+    rows.push(`<div class="hero-metric-row"><span class="hero-metric-label">PeptideBLEU</span>
+      <div class="comp-bar-bg"><div class="comp-bar-fill" style="width:${Math.round(r.score * 100)}%"></div></div>
+      <span class="hero-metric-val">${r.score.toFixed(4)}</span></div>`);
+  }
+  rows.push(`<div class="hero-metric-row"><span class="hero-metric-label">Rulebook</span>
+    <span class="hero-metric-val">${r.status === 'complete' ? '✓ Passed' : '○ ' + (r.status || 'unknown')}</span></div>`);
+  if (r.novelty_available && r.novelty_label) {
+    rows.push(`<div class="hero-metric-row"><span class="hero-metric-label">Novelty</span>
+      <span class="hero-metric-val">${r.novelty_label === 'novel' ? '✓ Novel' : r.novelty_label}</span></div>`);
+  }
+  if (r.plddt_score != null) {
+    rows.push(`<div class="hero-metric-row"><span class="hero-metric-label">pLDDT</span>
+      <span class="hero-metric-val">${r.plddt_score.toFixed(1)}${r.plddt_confidence ? ' (' + r.plddt_confidence + ')' : ''}</span></div>`);
+  }
+  return rows.join('');
+}
+
+function refineCandidate() {
+  const spec = currentSpec;
+  const seq = currentResult && currentResult.sequence;
+  if (!spec) return;
+  newExperiment();
+  openAdvancedPanel();
+  document.getElementById('advLenMin').value = spec.length_min;
+  document.getElementById('advLenMax').value = spec.length_max;
+  document.getElementById('advChargeMin').value = spec.charge_min;
+  document.getElementById('advChargeMax').value = spec.charge_max;
+  document.getElementById('advHydroMin').value = spec.hydro_min;
+  document.getElementById('advHydroMax').value = spec.hydro_max;
+  document.getElementById('advActivity').value = spec.activity || '';
+  if (seq) document.getElementById('genInput').value = `Refine this candidate: ${seq}`;
+}
+
+/* ── Result tabs (Phase 5) ────────────────────────────────────────────────── */
+function switchResultTab(tab) {
+  document.querySelectorAll('.result-tab').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
+  document.querySelectorAll('.result-tab-panel').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
+}
+
+function renderOverviewTab(r) {
+  document.getElementById('tabOverview').innerHTML = `
+    <div class="overview-grid">
+      <div class="spec-row"><span class="spec-label">Activity</span><span class="spec-value">${r.activity || '(general)'}</span></div>
+      <div class="spec-row"><span class="spec-label">Length</span><span class="spec-value">${(r.descriptors && r.descriptors.length != null) ? r.descriptors.length : r.sequence.length} aa</span></div>
+      <div class="spec-row"><span class="spec-label">Rulebook</span><span class="spec-value">${r.status === 'complete' ? '✓ Passed' : '○ ' + (r.status || 'unknown')}</span></div>
+      <div class="spec-row"><span class="spec-label">PeptideBLEU</span><span class="spec-value">${r.score != null ? r.score.toFixed(4) : '–'}</span></div>
+      <div class="spec-row"><span class="spec-label">Iterations</span><span class="spec-value">${r.iterations ?? '–'}</span></div>
+      <div class="spec-row"><span class="spec-label">Time</span><span class="spec-value">${r.time_seconds != null ? r.time_seconds.toFixed(1) + 's' : '–'}</span></div>
+    </div>
+    <div class="overview-structure-summary">
+      ${r.pdb_string
+        ? `ESMFold pLDDT ${r.plddt_score != null ? r.plddt_score.toFixed(1) : '–'} · <a href="#" onclick="switchResultTab('structure');return false;">View 3D Structure →</a>`
+        : `<span class="text-muted">Structural analysis unavailable. The peptide result is still complete.</span>`}
+    </div>
+  `;
+}
+
+function renderPropertiesTab(r) {
+  const d = r.descriptors;
+  const el = document.getElementById('tabProperties');
+  if (!d) {
+    el.innerHTML = `<p class="text-muted">Descriptor analysis unavailable.</p>`;
+    return;
+  }
+  const row = (label, val) => `<div class="spec-row"><span class="spec-label">${label}</span><span class="spec-value">${val}</span></div>`;
+  el.innerHTML = `
+    <div class="tab-section-label">SEQUENCE / PHYSICOCHEMICAL PROPERTIES</div>
+    <div class="spec-grid">
+      ${row('Length', d.length != null ? d.length + ' AA' : '–')}
+      ${row('Net charge', d.net_charge != null ? fmtCharge(d.net_charge) : '–')}
+      ${row('Hydrophobicity', d.hydro_pct != null ? d.hydro_pct + '%' : '–')}
+      ${row('GRAVY', d.gravy != null ? d.gravy : 'Not available (standard mode)')}
+      ${row('Aromaticity', d.aromaticity != null ? (d.aromaticity * 100).toFixed(1) + '%' : 'Not available (standard mode)')}
+      ${row('Mol. weight', d.mol_weight != null ? d.mol_weight + ' Da' : 'Not available (standard mode)')}
+      ${row('Charge class', d.charge_class || '–')}
+      ${row('Length class', d.length_class || '–')}
+    </div>
+    ${r.descriptors_partial ? '<p class="tab-hint">Full descriptor analysis available in harness mode.</p>' : ''}
+  `;
+}
+
+function renderPeptideBleuTab(r) {
+  const el = document.getElementById('tabPeptidebleu');
+  const comp = r.components || {};
+  if (Object.keys(comp).length === 0) {
+    el.innerHTML = `<p class="text-muted">${r.reference_used ? 'No component breakdown available.' : 'No reference — PeptideBLEU not computed.'}</p>`;
+    return;
+  }
+  const order = ['ngram_bleu', 'charge', 'hydrophobicity', 'functional_group', 'property_distribution', 'structural', 'blosum'];
+  const bars = order.map(k => {
+    const val = comp[k] ?? 0;
+    return `
+      <div class="comp-row">
+        <span class="comp-label">${COMPONENT_LABELS[k] || k}</span>
+        <div class="comp-bar-bg"><div class="comp-bar-fill" style="width:${Math.round(val * 100)}%"></div></div>
+        <span class="comp-val">${val.toFixed(4)}</span>
+      </div>`;
+  }).join('');
+  el.innerHTML = `
+    <div class="bleu-overall">Overall score <span class="bleu-overall-val">${r.score != null ? r.score.toFixed(4) : '–'}</span></div>
+    <div class="component-scores">${bars}</div>
+  `;
+}
+
+function renderSsBarsHtml(r) {
+  if (!r.dssp_available || r.helix_pct == null) {
+    return `<p class="text-muted">Predicted secondary structure not available.</p>`;
+  }
+  const bar = (key, val) => `
+    <div class="comp-row">
+      <span class="comp-label">${SS_BAR_LABELS[key]}</span>
+      <div class="comp-bar-bg"><div class="comp-bar-fill" style="width:${Math.round(val || 0)}%;background:${SS_BAR_COLORS[key]}"></div></div>
+      <span class="comp-val">${(val ?? 0).toFixed(1)}%</span>
+    </div>`;
+  return bar('helix_pct', r.helix_pct) + bar('sheet_pct', r.sheet_pct) + bar('coil_pct', r.coil_pct);
+}
+
+function renderResidueStripHtml(r) {
+  if (!r.ss_string) return `<p class="text-muted">Per-residue structure not available.</p>`;
+  const seq = r.sequence || '';
+  return r.ss_string.split('').map((c, i) => {
+    // pydssp 3-state codes, verified against backend/dssp_scorer.py: 'H' =
+    // helix, 'E' = sheet, everything else (incl. '-') = coil.
+    const cls = c === 'H' ? 'residue-helix' : c === 'E' ? 'residue-sheet' : 'residue-coil';
+    const aa = seq[i] || '?';
+    return `<span class="residue-chip ${cls}" onclick="inspectResidue(${i})">${aa}</span>`;
+  }).join('');
+}
+
+function renderStructureTab(r) {
+  const el = document.getElementById('tabStructure');
+  if (!r.pdb_string) {
+    el.innerHTML = `<p class="text-muted">${r.plddt_interp || 'Structural analysis unavailable. The peptide result is still complete.'}</p>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="structure-layout">
+      <div class="structure-viewer-col">
+        <div class="structure-viewer" id="structureViewer"></div>
+        <div class="structure-viewer-actions">
+          <button class="btn-chip" onclick="resetStructureView()">Reset</button>
+          <button class="btn-chip" onclick="downloadPdb()">Download PDB</button>
+        </div>
+      </div>
+      <div class="structure-info-col">
+        <div class="tab-section-label">STRUCTURAL CONFIDENCE</div>
+        <div class="spec-row"><span class="spec-label">ESMFold pLDDT</span><span class="spec-value">${r.plddt_score != null ? r.plddt_score.toFixed(1) : '–'}</span></div>
+        <div class="spec-row"><span class="spec-label">Confidence</span><span class="spec-value">${r.plddt_confidence || '–'}</span></div>
+        <div class="tab-section-label" style="margin-top:14px">PREDICTED SECONDARY STRUCTURE (DSSP)</div>
+        ${renderSsBarsHtml(r)}
+      </div>
+    </div>
+    <div class="tab-section-label" style="margin-top:16px">RESIDUE INSPECTION</div>
+    <div id="residueStrip" class="residue-strip">${renderResidueStripHtml(r)}</div>
+    <div id="residueInfo" class="residue-info">Select a residue above to inspect it.</div>
+  `;
+
+  renderStructureViewer(r.pdb_string);
+}
+
+function renderStructureViewer(pdbText) {
+  currentPdb = pdbText || null;
+  const container = document.getElementById('structureViewer');
+  if (!container) return;
+  container.innerHTML = '';
+
+  if (typeof $3Dmol === 'undefined') {
+    container.innerHTML = '<div class="trace-empty">3Dmol.js failed to load (check network/CDN access)</div>';
+    return;
+  }
+
+  structureViewer = $3Dmol.createViewer(container, { backgroundColor: '#000000' });
+  structureViewer.addModel(pdbText, 'pdb');
+  structureViewer.setStyle({}, {
+    cartoon: {
+      colorfunc: (atom) => {
+        const b = atom.b;
+        if (b >= 90) return '#00e5c3';
+        if (b >= 70) return '#3b82f6';
+        if (b >= 50) return '#fbbf24';
+        return '#ef4444';
+      },
+    },
+  });
+  structureViewer.zoomTo();
+  structureViewer.render();
+}
+
+function resetStructureView() {
+  if (!structureViewer) return;
+  structureViewer.zoomTo();
+  structureViewer.render();
+}
+
+function inspectResidue(index) {
+  const r = currentResult;
+  const info = document.getElementById('residueInfo');
+  if (!r || !info) return;
+  const aa = (r.sequence || '')[index] || '?';
+  const code = r.ss_string ? r.ss_string[index] : null;
+  const ssLabel = code === 'H' ? 'Helix' : code === 'E' ? 'Sheet' : code ? 'Coil' : 'Not available';
+  info.innerHTML = `
+    <div class="spec-row"><span class="spec-label">Residue</span><span class="spec-value">${index + 1}</span></div>
+    <div class="spec-row"><span class="spec-label">Amino acid</span><span class="spec-value">${aa} — ${AA_NAMES[aa] || 'Not available'}</span></div>
+    <div class="spec-row"><span class="spec-label">Secondary structure</span><span class="spec-value">${ssLabel}</span></div>
+    <div class="spec-row"><span class="spec-label">PDB chain</span><span class="spec-value">A:${index + 1}</span></div>
+  `;
+}
+
+function renderNoveltyTab(r) {
+  const el = document.getElementById('tabNovelty');
+  if (!r.novelty_available || r.novelty_score == null) {
+    el.innerHTML = `<p class="text-muted">${r.novelty_interp || 'Novelty check unavailable. BLAST database may not be configured.'}</p>`;
+    return;
+  }
+  const style = NOVELTY_COLORS[r.novelty_label] || NOVELTY_COLORS.unknown;
+  el.innerHTML = `
+    <div class="novelty-badge-row"><span class="novelty-label" style="color:${style.color}">${style.label}</span></div>
+    <div class="comp-row">
+      <span class="comp-label">Similarity score</span>
+      <div class="comp-bar-bg"><div class="comp-bar-fill" style="width:${Math.round(r.novelty_score * 100)}%;background:${style.color}"></div></div>
+      <span class="comp-val">${r.novelty_score.toFixed(2)}</span>
+    </div>
+    ${r.closest_match ? `<div class="spec-row"><span class="spec-label">Closest match</span><span class="spec-value">${r.closest_match}</span></div>` : ''}
+    <div class="spec-row"><span class="spec-label">Database</span><span class="spec-value">BLAST (IIIT-D 105K)</span></div>
+    <p class="tab-hint">${r.novelty_interp || ''}</p>
+  `;
+}
+
+function renderTraceTab(r) {
+  const el = document.getElementById('tabTrace');
+  let html = '';
+
+  if (r.trace_url) {
+    html += `<p style="margin-bottom:12px"><a href="${r.trace_url}" target="_blank" rel="noopener" class="trace-link" style="margin-left:0">View full LangSmith trace →</a></p>`;
+  }
+
+  html += '<div class="tab-section-label">ATTEMPT HISTORY</div>';
+  if (attemptHistory.length === 0) {
+    html += '<p class="text-muted">No attempt history recorded.</p>';
+  } else {
+    html += '<div class="trace-list">' + attemptHistory.map(a => {
+      const seqPreview = a.sequence ? (a.sequence.length > 24 ? a.sequence.slice(0, 24) + '…' : a.sequence) : '—';
+      const editHtml = a.edit_op
+        ? `<span class="edit-op-detail">Edit: pos ${a.edit_op.position} ${a.edit_op.from_aa || '∅'}→${a.edit_op.to_aa || '∅'} (${a.edit_op.reason})</span>`
+        : '';
+      return `<div class="trace-row ${a.passed ? 'pass' : (a.sequence ? 'fail' : 'error')}">
+        <span class="trace-status">${a.passed ? '✓' : '✗'}</span>
+        Attempt ${a.n}: ${seqPreview} | BLEU ${a.score != null ? a.score.toFixed(4) : '–'}
+        ${editHtml}
+      </div>`;
+    }).join('') + '</div>';
+  }
+
+  const lastViolations = attemptHistory.length ? attemptHistory[attemptHistory.length - 1].violations : null;
+  html += '<div class="tab-section-label" style="margin-top:14px">DIAGNOSTIC VIOLATIONS</div>';
+  if (lastViolations && lastViolations.length) {
+    html += '<div class="violations-list">' + lastViolations.map(v => `
+      <div class="violation-row">
+        <span class="violation-rule">${v.rule}</span>
+        <span class="violation-detail">current: ${v.current} → target: ${v.target} (excess ${v.excess})</span>
+        <span class="violation-fix">${v.fix}</span>
+        ${v.positions && v.positions.length ? `<span class="violation-detail">positions: ${v.positions.join(', ')}</span>` : ''}
+      </div>`).join('') + '</div>';
+  } else {
+    html += '<p class="text-muted">No violations on the final candidate.</p>';
+  }
+
+  html += '<div class="tab-section-label" style="margin-top:14px">EDIT STATISTICS</div>';
+  const stats = r.edit_stats || {};
+  if (Object.keys(stats).length === 0) {
+    html += '<p class="text-muted">No edits were needed.</p>';
+  } else {
+    html += '<div class="component-scores">' + Object.entries(stats).map(([op, s]) => {
+      const deltaStr = s.avg_delta >= 0 ? `+${s.avg_delta.toFixed(4)}` : s.avg_delta.toFixed(4);
+      return `<div class="comp-row"><span class="comp-label">${op}</span><span class="comp-val" style="width:auto">${s.count} used · ${s.improvements} improved · avg Δ ${deltaStr}</span></div>`;
+    }).join('') + '</div>';
+  }
+
+  el.innerHTML = html;
+}
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+function showErrorCard(message, options) {
+  const { technical, retry } = options || {};
+  let html = `<p>${escapeHtml(message)}</p>`;
+  if (retry) {
+    html += `<button class="btn-chip" style="margin-top:10px" onclick="retryGeneration()">Retry</button>`;
+  }
+  if (technical) {
+    html += `<details class="error-technical"><summary>Technical details ▾</summary><pre>${escapeHtml(technical)}</pre></details>`;
+  }
+  document.getElementById('errorMessage').innerHTML = html;
   document.getElementById('errorCard').style.display = 'block';
+}
+
+function retryGeneration() {
+  if (!currentSpec || isGenerating) return;
+  document.getElementById('errorCard').style.display = 'none';
+  runGeneration(currentSpec);
 }
 
 function copySequence() {
@@ -570,7 +1065,9 @@ function copySequence() {
 function exportFasta() {
   const seq = document.getElementById('resultSequence').textContent.trim();
   if (!seq) return;
-  const fasta = `>PepForge_candidate\n${seq}\n`;
+  const activity = (currentResult && currentResult.activity) || 'unspecified';
+  const scoreStr = (currentResult && currentResult.score != null) ? currentResult.score.toFixed(4) : 'NA';
+  const fasta = `>PepForge_Candidate_1 | ${activity} | PeptideBLEU=${scoreStr}\n${seq}\n`;
   const blob = new Blob([fasta], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -630,49 +1127,6 @@ async function hitlDecide(action) {
   }
 }
 
-/* ── Diagnostic violations (dormant — Phase 5's Trace/Properties tab) ────── */
-function renderViolations(violations) {
-  const card = document.getElementById('violationsCard');
-  const list = document.getElementById('violationsList');
-  if (!card || !list) return;
-  if (!violations || violations.length === 0) {
-    card.style.display = 'none';
-    list.innerHTML = '';
-    return;
-  }
-  list.innerHTML = violations.map(v => `
-    <div class="violation-row">
-      <span class="violation-rule">${v.rule}</span>
-      <span class="violation-detail">current: ${v.current} → target: ${v.target}</span>
-      <span class="violation-fix">${v.fix}</span>
-    </div>
-  `).join('');
-  card.style.display = 'block';
-}
-
-/* ── Edit statistics (dormant — Phase 5's Trace tab) ──────────────────────── */
-function renderEditStats(stats) {
-  const card = document.getElementById('editStatsCard');
-  const list = document.getElementById('editStatsList');
-  if (!card || !list) return;
-  list.innerHTML = '';
-  if (!stats || Object.keys(stats).length === 0) {
-    card.style.display = 'none';
-    return;
-  }
-  Object.entries(stats).forEach(([op, s]) => {
-    const deltaStr = s.avg_delta >= 0 ? `+${s.avg_delta.toFixed(4)}` : s.avg_delta.toFixed(4);
-    const row = document.createElement('div');
-    row.className = 'comp-row';
-    row.innerHTML = `
-      <span class="comp-label">${op}</span>
-      <span class="comp-val" style="width:auto">${s.count} used · ${s.improvements} improved · avg Δ ${deltaStr}</span>
-    `;
-    list.appendChild(row);
-  });
-  card.style.display = 'block';
-}
-
 /* ── LangSmith trace link (actively used by showBestCandidate) ───────────── */
 function renderTraceLink(url) {
   const link = document.getElementById('traceLink');
@@ -682,30 +1136,7 @@ function renderTraceLink(url) {
   link.style.display = 'inline-block';
 }
 
-/* pLDDT (ESMFold) structural confidence — dormant, Phase 5's Structure tab */
-const PLDDT_COLORS = {
-  very_high: { color: '#00e5c3', label: 'Very High' },
-  high:      { color: '#3b82f6', label: 'Confident' },
-  low:       { color: '#fbbf24', label: 'Low' },
-  very_low:  { color: '#ef4444', label: 'Very Low' },
-  unknown:   { color: '#64748b', label: 'N/A' },
-};
-
-function renderPlddt(score, confidence) {
-  const badge = document.getElementById('metricPlddt');
-  const valueEl = document.getElementById('plddtValue');
-  if (!badge || !valueEl) return;
-  if (score == null) {
-    badge.style.display = 'none';
-    return;
-  }
-  const style = PLDDT_COLORS[confidence] || PLDDT_COLORS.unknown;
-  valueEl.textContent = `${score.toFixed(1)}  ${style.label}`;
-  valueEl.style.color = style.color;
-  badge.style.display = '';
-}
-
-/* BLAST novelty assessment — dormant, Phase 5's Novelty tab */
+/* BLAST novelty assessment — colors reused by renderNoveltyTab (Phase 5) */
 const NOVELTY_COLORS = {
   novel:          { color: '#00e5c3', label: 'Novel' },
   low_similarity: { color: '#34d399', label: 'Mostly Novel' },
@@ -713,100 +1144,6 @@ const NOVELTY_COLORS = {
   known:          { color: '#ef4444', label: 'Known' },
   unknown:        { color: '#64748b', label: 'N/A' },
 };
-
-function renderNovelty(blast) {
-  const badge = document.getElementById('metricNovelty');
-  const valueEl = document.getElementById('noveltyValue');
-  const card = document.getElementById('noveltyCard');
-  const barsEl = document.getElementById('noveltyBars');
-  const interpEl = document.getElementById('noveltyInterp');
-  if (!badge || !card) return;
-
-  if (!blast) {
-    badge.style.display = 'none';
-    card.style.display = 'none';
-    return;
-  }
-
-  const style = NOVELTY_COLORS[blast.novelty_label] || NOVELTY_COLORS.unknown;
-
-  if (!blast.blast_available) {
-    badge.style.display = 'none';
-    barsEl.innerHTML = '';
-    interpEl.textContent = 'BLAST not installed (sudo apt-get install ncbi-blast+)';
-    card.style.display = 'block';
-    return;
-  }
-
-  if (!blast.db_exists) {
-    badge.style.display = 'none';
-    barsEl.innerHTML = '';
-    interpEl.textContent = 'Building database... (first run only)';
-    card.style.display = 'block';
-    return;
-  }
-
-  valueEl.textContent = style.label;
-  valueEl.style.color = style.color;
-  badge.style.display = '';
-
-  barsEl.innerHTML = '';
-  if (blast.similarity_score != null) {
-    const row = document.createElement('div');
-    row.className = 'comp-row';
-    row.innerHTML = `
-      <span class="comp-label">Similarity to Database</span>
-      <div class="comp-bar-bg">
-        <div class="comp-bar-fill" style="width:${Math.round(blast.similarity_score * 100)}%;background:${style.color}"></div>
-      </div>
-      <span class="comp-val">${blast.similarity_score.toFixed(2)}</span>
-    `;
-    barsEl.appendChild(row);
-  }
-
-  interpEl.textContent = blast.interpretation || '';
-  card.style.display = 'block';
-}
-
-/* 3D structure (ESMFold PDB) — dormant, Phase 5's Structure tab */
-function renderStructure(pdbText) {
-  const card = document.getElementById('structureCard');
-  if (!card) return;
-  currentPdb = pdbText || null;
-
-  if (!pdbText) {
-    card.style.display = 'none';
-    return;
-  }
-
-  const container = document.getElementById('structureViewer');
-  container.innerHTML = '';
-
-  if (typeof $3Dmol === 'undefined') {
-    container.innerHTML = '<div class="trace-empty">3Dmol.js failed to load (check network/CDN access)</div>';
-    card.style.display = 'block';
-    return;
-  }
-
-  structureViewer = $3Dmol.createViewer(container, { backgroundColor: '#000000' });
-  structureViewer.addModel(pdbText, 'pdb');
-  // Color by pLDDT (stored in the B-factor column by ESMFold), same bands as the badge.
-  structureViewer.setStyle({}, {
-    cartoon: {
-      colorfunc: (atom) => {
-        const b = atom.b;
-        if (b >= 90) return '#00e5c3';
-        if (b >= 70) return '#3b82f6';
-        if (b >= 50) return '#fbbf24';
-        return '#ef4444';
-      },
-    },
-  });
-  structureViewer.zoomTo();
-  structureViewer.render();
-
-  card.style.display = 'block';
-}
 
 function downloadPdb() {
   if (!currentPdb) return;
@@ -822,42 +1159,7 @@ function downloadPdb() {
   URL.revokeObjectURL(url);
 }
 
-/* Structural graph analysis — dormant, Phase 5 (if re-enabled) */
-function graphScoreStyle(score) {
-  if (score >= 3.0) return { color: '#00e5c3', label: 'Highly Structured' };
-  if (score >= 1.5) return { color: '#3b82f6', label: 'Moderately Structured' };
-  if (score >= 0.5) return { color: '#fbbf24', label: 'Loosely Structured' };
-  return { color: '#64748b', label: 'Flexible / Disordered' };
-}
-
-function renderGraphFeatures(graph) {
-  const card = document.getElementById('graphCard');
-  if (!card) return;
-  if (!graph || graph.structure_score == null) {
-    card.style.display = 'none';
-    return;
-  }
-
-  const style = graphScoreStyle(graph.structure_score);
-  const bar = document.getElementById('graphScoreBar');
-  const val = document.getElementById('graphScoreVal');
-  bar.style.width = `${Math.min(100, graph.structure_score / 5 * 100)}%`;
-  bar.style.background = style.color;
-  val.textContent = `${graph.structure_score.toFixed(2)}`;
-  val.style.color = style.color;
-
-  const counts = document.getElementById('graphCounts');
-  counts.innerHTML = `
-    <span>H-bonds: <span class="count-val">${graph.n_hbonds ?? '–'}</span></span>
-    <span>Ionic: <span class="count-val">${graph.n_ionic ?? '–'}</span></span>
-    <span>Pi-Pi Stacking: <span class="count-val">${graph.n_pi_pi ?? '–'}</span></span>
-  `;
-
-  document.getElementById('graphInterp').textContent = graph.interpretation || '';
-  card.style.display = 'block';
-}
-
-/* Secondary structure (DSSP) — dormant, Phase 5's Structure tab */
+/* Secondary structure (DSSP) — colors/labels reused by renderSsBarsHtml (Phase 5) */
 const SS_BAR_COLORS = {
   helix_pct: '#00e5c3',
   sheet_pct: '#3b82f6',
@@ -870,246 +1172,6 @@ const SS_BAR_LABELS = {
   turn_pct: 'Turn',
   coil_pct: 'Coil',
 };
-
-function renderDssp(ss) {
-  const card = document.getElementById('dsspCard');
-  if (!card) return;
-  if (!ss) {
-    card.style.display = 'none';
-    return;
-  }
-
-  const ssStringEl = document.getElementById('dsspSsString');
-  const barsEl = document.getElementById('dsspBars');
-  const simEl = document.getElementById('dsspSimilarity');
-  const interpEl = document.getElementById('dsspInterp');
-  ssStringEl.innerHTML = '';
-  barsEl.innerHTML = '';
-  simEl.innerHTML = '';
-  interpEl.textContent = '';
-
-  if (!ss.dssp_available) {
-    interpEl.textContent = 'DSSP binary not installed on server. Install with: sudo apt-get install dssp';
-    card.style.display = 'block';
-    return;
-  }
-
-  if (ss.error || ss.helix_pct == null) {
-    interpEl.textContent = 'Secondary structure: unavailable';
-    card.style.display = 'block';
-    return;
-  }
-
-  ssStringEl.textContent = ss.ss_string || '';
-
-  ['helix_pct', 'sheet_pct', 'turn_pct', 'coil_pct'].forEach(key => {
-    const val = ss[key] ?? 0;
-    const row = document.createElement('div');
-    row.className = 'comp-row';
-    row.innerHTML = `
-      <span class="comp-label">${SS_BAR_LABELS[key]}</span>
-      <div class="comp-bar-bg">
-        <div class="comp-bar-fill" style="width:${Math.round(val)}%;background:${SS_BAR_COLORS[key]}"></div>
-      </div>
-      <span class="comp-val">${val.toFixed(1)}%</span>
-    `;
-    barsEl.appendChild(row);
-  });
-
-  if (ss.ss_similarity) {
-    const sim = ss.ss_similarity;
-    const simRow = document.createElement('div');
-    simRow.className = 'comp-row';
-    simRow.innerHTML = `
-      <span class="comp-label">SS Similarity vs Ref</span>
-      <div class="comp-bar-bg">
-        <div class="comp-bar-fill" style="width:${Math.round((sim.overall_ss_similarity ?? 0) * 100)}%"></div>
-      </div>
-      <span class="comp-val">${(sim.overall_ss_similarity ?? 0).toFixed(3)}</span>
-    `;
-    simEl.appendChild(simRow);
-  }
-
-  interpEl.textContent = ss.interpretation || '';
-  card.style.display = 'block';
-}
-
-/* 2D residue-interaction graph (D3 force layout) — dormant, Phase 5 (if re-enabled) */
-const RESIDUE_COLORS = {
-  K: '#3b82f6', R: '#3b82f6', H: '#60a5fa',
-  D: '#ef4444', E: '#f87171',
-  L: '#00e5c3', I: '#00e5c3', V: '#00e5c3',
-  F: '#00e5c3', W: '#00e5c3', M: '#00e5c3',
-  A: '#34d399', P: '#34d399',
-  S: '#fbbf24', T: '#fbbf24', N: '#fbbf24',
-  Q: '#fbbf24', Y: '#f59e0b', C: '#d97706',
-  G: '#9ca3af',
-};
-
-const EDGE_COLORS = {
-  hbond: '#fbbf24',
-  ionic: '#3b82f6',
-  pi_pi: '#a855f7',
-  hydro: '#34d399',
-  ca_dist: 'rgba(255,255,255,0.05)',
-};
-
-function renderProteinGraph(graphData) {
-  const container = document.getElementById('protein-graph-container');
-  if (!container) return;
-  if (!graphData || !graphData.nodes || graphData.nodes.length === 0) {
-    container.style.display = 'none';
-    return;
-  }
-  if (typeof d3 === 'undefined') {
-    container.style.display = 'none';
-    return;
-  }
-
-  const svg = d3.select('#protein-graph');
-  container.style.display = 'block';
-  svg.selectAll('*').remove();
-
-  const width = svg.node().getBoundingClientRect().width || 600;
-  const height = 320;
-  svg.attr('viewBox', `0 0 ${width} ${height}`);
-
-  const nodes = graphData.nodes.map(n => ({ ...n }));
-
-  const backbone = [];
-  for (let i = 0; i < nodes.length - 1; i++) {
-    backbone.push({ source: i, target: i + 1, weight: 0.05, type: 'backbone' });
-  }
-
-  const edges = [
-    ...(graphData.edges.hbonds || []),
-    ...(graphData.edges.ionic || []),
-    ...(graphData.edges.pi_pi || []),
-    ...(graphData.edges.hydro || []),
-  ].filter(e => e.weight > 0.005).map(e => ({ ...e }));
-
-  const simulation = d3.forceSimulation(nodes)
-    .force('backbone', d3.forceLink(backbone)
-      .id(d => d.id)
-      .distance(30)
-      .strength(0.6))
-    .force('interactions', d3.forceLink(edges)
-      .id(d => d.id)
-      .distance(d => 40 / (d.weight + 0.01))
-      .strength(0.3))
-    .force('charge', d3.forceManyBody().strength(-80))
-    .force('center', d3.forceCenter(width / 2, height / 2))
-    .force('collision', d3.forceCollide(18))
-    .stop();
-
-  const margin = 20;
-  for (let i = 0; i < 200; i++) {
-    simulation.tick();
-    for (const n of nodes) {
-      n.x = Math.max(margin, Math.min(width - margin, n.x));
-      n.y = Math.max(margin, Math.min(height - margin, n.y));
-    }
-  }
-
-  svg.append('g').attr('class', 'backbone')
-    .selectAll('line')
-    .data(backbone)
-    .join('line')
-    .attr('x1', d => d.source.x)
-    .attr('y1', d => d.source.y)
-    .attr('x2', d => d.target.x)
-    .attr('y2', d => d.target.y)
-    .attr('stroke', 'rgba(255,255,255,0.25)')
-    .attr('stroke-width', 1.5);
-
-  svg.append('g').attr('class', 'edges')
-    .selectAll('line')
-    .data(edges)
-    .join('line')
-    .attr('x1', d => d.source.x)
-    .attr('y1', d => d.source.y)
-    .attr('x2', d => d.target.x)
-    .attr('y2', d => d.target.y)
-    .attr('stroke', d => EDGE_COLORS[d.type] || '#ffffff')
-    .attr('stroke-width', d => Math.min(d.weight * 20 + 0.5, 2.5))
-    .attr('stroke-opacity', 0.6);
-
-  const nodeGroup = svg.append('g').attr('class', 'nodes')
-    .selectAll('g')
-    .data(nodes)
-    .join('g')
-    .attr('transform', d => `translate(${d.x},${d.y})`);
-
-  nodeGroup.append('circle')
-    .attr('r', 10)
-    .attr('fill', d => RESIDUE_COLORS[d.residue] || '#64748b')
-    .attr('fill-opacity', 0.85)
-    .attr('stroke', 'rgba(255,255,255,0.2)')
-    .attr('stroke-width', 1);
-
-  nodeGroup.append('text')
-    .attr('class', 'node-label')
-    .text(d => d.residue);
-
-  nodeGroup.append('title')
-    .text(d => `${d.residue} (pos ${d.id + 1})`);
-}
-
-/* PeptideBLEU component bars — dormant, Phase 5's PeptideBLEU tab */
-function renderComponents(comp, plddtScore, helixPct) {
-  const card = document.getElementById('componentCard');
-  const container = document.getElementById('componentScores');
-  if (!card || !container) return;
-  container.innerHTML = '';
-
-  const order = ['ngram_bleu', 'charge', 'hydrophobicity', 'functional_group',
-                  'property_distribution', 'structural', 'blosum'];
-
-  order.forEach(key => {
-    const val = comp[key] ?? 0;
-    const label = COMPONENT_LABELS[key] || key;
-    const pct = Math.round(val * 100);
-
-    const row = document.createElement('div');
-    row.className = 'comp-row';
-    row.innerHTML = `
-      <span class="comp-label">${label}</span>
-      <div class="comp-bar-bg">
-        <div class="comp-bar-fill" style="width:${pct}%"></div>
-      </div>
-      <span class="comp-val">${val.toFixed(4)}</span>
-    `;
-    container.appendChild(row);
-  });
-
-  if (plddtScore != null) {
-    const row = document.createElement('div');
-    row.className = 'comp-row';
-    row.innerHTML = `
-      <span class="comp-label">pLDDT (ESMFold)</span>
-      <div class="comp-bar-bg">
-        <div class="comp-bar-fill" style="width:${Math.round(plddtScore)}%"></div>
-      </div>
-      <span class="comp-val">${plddtScore.toFixed(1)}</span>
-    `;
-    container.appendChild(row);
-  }
-
-  if (helixPct != null) {
-    const row = document.createElement('div');
-    row.className = 'comp-row';
-    row.innerHTML = `
-      <span class="comp-label">Helix % (DSSP)</span>
-      <div class="comp-bar-bg">
-        <div class="comp-bar-fill" style="width:${Math.round(helixPct)}%;background:#00e5c3"></div>
-      </div>
-      <span class="comp-val">${helixPct.toFixed(1)}%</span>
-    `;
-    container.appendChild(row);
-  }
-
-  card.style.display = 'block';
-}
 
 function scoreClass(s) {
   if (s >= 0.35) return 'score-good';

@@ -8,7 +8,6 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
   <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
 </head>
 <body>
   <div class="app-shell" id="appShell">
@@ -110,7 +109,17 @@
         <!-- EMPTY STATE: no experiment running yet -->
         <div class="generate-empty" id="generateEmpty">
           <div class="generate-empty-inner">
-            <h1 class="generate-title">What peptide do you want to design?</h1>
+            <div class="empty-hero-header">
+              <div class="empty-hero-icon">🧬</div>
+              <div class="empty-hero-tagline">AI Peptide Research Agent</div>
+            </div>
+            <h1 class="generate-title">What would you like to design?</h1>
+
+            <div class="quick-actions-row">
+              <button class="btn-chip" onclick="document.getElementById('genInput').focus()">Generate peptide</button>
+              <button class="btn-chip" onclick="navigateTo('analyze')">Analyze sequence</button>
+              <button class="btn-chip" onclick="navigateTo('compare')">Compare candidates</button>
+            </div>
 
             <div class="generate-input-wrapper">
               <textarea id="genInput" class="generate-textarea" rows="3"
@@ -181,6 +190,16 @@ e.g. Generate an antibacterial peptide with 15–20 residues, charge +2 to +5, h
                 </label>
               </div>
             </div>
+
+            <div class="quick-templates-row">
+              <div class="section-label" style="text-align:center">QUICK TEMPLATES</div>
+              <div class="quick-templates-chips">
+                <button class="btn-chip" onclick="applyTemplate('amp')">Antimicrobial</button>
+                <button class="btn-chip" onclick="applyTemplate('cpp')">Cell-penetrating</button>
+                <button class="btn-chip" onclick="applyTemplate('antifungal')">Antifungal</button>
+                <button class="btn-chip" onclick="applyTemplate('custom')">Custom</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -196,6 +215,9 @@ e.g. Generate an antibacterial peptide with 15–20 residues, charge +2 to +5, h
 
           <div class="result-card" id="progressCard">
             <div class="result-card-header"><span class="result-icon">⚙️</span> AGENT PROGRESS</div>
+            <div class="progress-header" id="progressHeader" style="display:none">
+              <span class="spinner"></span> PepForge is working...
+            </div>
             <div class="progress-timeline" id="progressTimeline"></div>
           </div>
 
@@ -226,12 +248,35 @@ e.g. Generate an antibacterial peptide with 15–20 residues, charge +2 to +5, h
               <span class="result-icon">🏆</span> BEST CANDIDATE
               <a id="traceLink" class="trace-link" href="#" target="_blank" rel="noopener" style="display:none">View full trace →</a>
             </div>
-            <div class="result-sequence" id="resultSequence"></div>
-            <div class="best-candidate-meta" id="bestCandidateMeta"></div>
-            <div class="best-candidate-actions">
+            <div class="hero-sequence-row">
+              <div class="result-sequence" id="resultSequence"></div>
               <button class="btn-chip" onclick="copySequence()">Copy</button>
-              <button class="btn-chip" onclick="exportFasta()">Export FASTA</button>
             </div>
+            <div class="hero-subtitle" id="heroSubtitle"></div>
+            <div class="hero-metrics" id="heroMetrics"></div>
+            <div class="best-candidate-actions">
+              <button class="btn-chip" onclick="navigateTo('analyze')">Analyze</button>
+              <button class="btn-chip" onclick="navigateTo('compare')">Compare</button>
+              <button class="btn-chip" onclick="refineCandidate()">Refine</button>
+              <button class="btn-chip" onclick="exportFasta()">Export</button>
+            </div>
+          </div>
+
+          <div class="result-card" id="resultTabsCard" style="display:none">
+            <div class="result-tabs" id="resultTabs">
+              <button class="result-tab active" data-tab="overview" onclick="switchResultTab('overview')">Overview</button>
+              <button class="result-tab" data-tab="properties" onclick="switchResultTab('properties')">Properties</button>
+              <button class="result-tab" data-tab="peptidebleu" onclick="switchResultTab('peptidebleu')">PeptideBLEU</button>
+              <button class="result-tab" data-tab="structure" onclick="switchResultTab('structure')">Structure</button>
+              <button class="result-tab" data-tab="novelty" onclick="switchResultTab('novelty')">Novelty</button>
+              <button class="result-tab" data-tab="trace" onclick="switchResultTab('trace')">Trace</button>
+            </div>
+            <div class="result-tab-panel active" data-tab="overview" id="tabOverview"></div>
+            <div class="result-tab-panel" data-tab="properties" id="tabProperties"></div>
+            <div class="result-tab-panel" data-tab="peptidebleu" id="tabPeptidebleu"></div>
+            <div class="result-tab-panel" data-tab="structure" id="tabStructure"></div>
+            <div class="result-tab-panel" data-tab="novelty" id="tabNovelty"></div>
+            <div class="result-tab-panel" data-tab="trace" id="tabTrace"></div>
           </div>
 
           <div class="result-card" id="errorCard" style="display:none">

@@ -239,6 +239,19 @@ html, body {
 }
 .experiment-meta { font-size: 10px; color: var(--text-muted); }
 
+/* ── History view (Phase 7) ───────────────────────────────────────────────── */
+.history-wrapper { max-width: 720px; margin: 0 auto; }
+.history-heading { font-size: 20px; margin-bottom: 16px; }
+.history-list { gap: 6px; margin-bottom: 16px; }
+.history-item {
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  padding: 10px 12px;
+}
+.history-item:hover { border-color: var(--cyan-dim); }
+.history-item .experiment-seq { font-size: 13px; }
+.history-item .experiment-meta { font-size: 11px; margin-top: 2px; }
+
 /* ── Sidebar footer ──────────────────────────────────────────────────────── */
 .sidebar-footer {
   padding: 14px 20px;
@@ -289,12 +302,38 @@ html, body {
   min-height: calc(100vh - 56px);
 }
 .generate-empty-inner { width: 100%; max-width: 640px; }
+
+.empty-hero-header { text-align: center; margin-bottom: 8px; }
+.empty-hero-icon { font-size: 36px; line-height: 1; }
+.empty-hero-tagline {
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+
 .generate-title {
   font-size: 24px;
   font-weight: 600;
   text-align: center;
   color: var(--text-primary);
+  margin-bottom: 16px;
+}
+
+.quick-actions-row {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
   margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.quick-templates-row { margin-top: 18px; text-align: center; }
+.quick-templates-chips {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .generate-input-wrapper { position: relative; }
@@ -458,6 +497,31 @@ html, body {
 
 /* ── Error card ───────────────────────────────────────────────────────────── */
 .error-message { font-size: 12.5px; color: var(--text-secondary); line-height: 1.6; }
+.error-technical {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.error-technical summary { cursor: pointer; color: var(--text-secondary); }
+.error-technical pre {
+  margin-top: 6px;
+  padding: 10px;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--font-mono);
+}
+
+.progress-header {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--cyan);
+  margin-bottom: 10px;
+}
 
 .btn-hitl-skip:hover { border-color: var(--text-secondary); color: var(--text-primary); }
 
@@ -466,14 +530,116 @@ html, body {
   .generate-empty { min-height: auto; padding-top: 4vh; }
 }
 
+/* ── Hero card (Best Candidate) — Phase 5 ────────────────────────────────── */
+.hero-sequence-row { display: flex; align-items: center; gap: 10px; }
+.hero-sequence-row .result-sequence { flex: 1; }
+.hero-subtitle { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+.hero-metrics { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+.hero-metric-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+.hero-metric-label { width: 110px; min-width: 110px; color: var(--text-secondary); }
+.hero-metric-val { font-family: var(--font-mono); color: var(--text-primary); font-weight: 600; }
+
+/* ── Result tabs — Phase 5 ────────────────────────────────────────────────── */
+.result-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
+  overflow-x: auto;
+}
+.result-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 8px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.result-tab:hover { color: var(--text-primary); }
+.result-tab.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+.result-tab-panel { display: none; }
+.result-tab-panel.active { display: block; }
+
+.tab-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.tab-hint { font-size: 11px; color: var(--text-muted); font-style: italic; margin-top: 8px; }
+.text-muted { color: var(--text-muted); font-size: 12.5px; }
+
+.overview-grid { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.overview-structure-summary { font-size: 12px; color: var(--text-secondary); }
+.overview-structure-summary a { color: var(--cyan); text-decoration: none; }
+.overview-structure-summary a:hover { text-decoration: underline; }
+
+.bleu-overall { font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; }
+.bleu-overall-val { font-family: var(--font-mono); font-size: 20px; font-weight: 700; color: var(--cyan); margin-left: 8px; }
+
+.novelty-badge-row { margin-bottom: 10px; }
+.novelty-label { font-size: 16px; font-weight: 700; }
+
+.edit-op-detail {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-style: italic;
+  white-space: nowrap;
+}
+
+/* ── Structure tab ────────────────────────────────────────────────────────── */
+.structure-layout { display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px; }
+.structure-viewer-col { display: flex; flex-direction: column; gap: 8px; }
+.structure-viewer-actions { display: flex; gap: 8px; }
+.structure-info-col { display: flex; flex-direction: column; }
+
+.residue-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  margin-bottom: 10px;
+}
+.residue-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  cursor: pointer;
+  color: #04131a;
+  transition: transform 0.1s;
+}
+.residue-chip:hover { transform: scale(1.2); }
+.residue-chip.residue-helix { background: #00e5c3; }
+.residue-chip.residue-sheet { background: #3b82f6; }
+.residue-chip.residue-coil  { background: #5b6b7d; }
+.residue-info {
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+}
+
+@media (max-width: 768px) {
+  .structure-layout { grid-template-columns: 1fr; }
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    Component-level utility classes below are preserved from the pre-redesign
-   frontend (frontend/AUDIT.md "WHAT TO PRESERVE") — not currently referenced
-   by any element in index.html (the old results panel was removed in Phase 3
-   along with the old form), but app.js's generate()/handleEvent()/render*()
-   functions still target these exact class/id names and are kept intact,
-   ready to be reconnected to new markup in Phase 4 (generation workspace)
-   and Phase 5 (result cards + tabs) rather than rewritten from scratch.
+   frontend (frontend/AUDIT.md "WHAT TO PRESERVE"). Phase 4 reconnected the
+   HITL/command-bar ones; Phase 5 reconnects the rest (comp-row/trace-row/
+   violations/metric-badge family) into the new tabbed result panel above —
+   none of this is dormant anymore.
    ══════════════════════════════════════════════════════════════════════════ */
 
 /* ── Prompt preview / custom mode ────────────────────────────────────────── */
@@ -766,31 +932,7 @@ html, body {
   text-align: right;
 }
 
-/* ── Secondary structure (DSSP) ──────────────────────────────────────────── */
-.ss-string {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  letter-spacing: 1px;
-  color: var(--text-secondary);
-  word-break: break-all;
-  margin-bottom: 10px;
-}
-
-/* ── 3D structure viewer ─────────────────────────────────────────────────── */
-.pdb-download-btn {
-  margin-left: auto;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-family: var(--font-mono);
-  letter-spacing: 0.04em;
-  padding: 4px 10px;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease;
-}
-.pdb-download-btn:hover { border-color: var(--cyan-dim); color: var(--cyan); }
+/* ── 3D structure viewer (Structure tab) ──────────────────────────────────── */
 .structure-viewer {
   width: 100%;
   height: 320px;
@@ -798,59 +940,6 @@ html, body {
   overflow: hidden;
   background: #000;
   position: relative;
-}
-
-/* ── Structural graph analysis ───────────────────────────────────────────── */
-.graph-score-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-.graph-score-label { font-size: 11px; color: var(--text-secondary); width: 110px; min-width: 110px; }
-.graph-score-val {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 600;
-  width: 50px;
-  text-align: right;
-}
-.graph-counts {
-  display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.graph-counts .count-val { color: var(--text-primary); font-weight: 600; }
-.graph-interp {
-  font-size: 11px;
-  color: var(--text-muted);
-  line-height: 1.5;
-}
-
-#protein-graph-container {
-  margin-top: 16px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: var(--radius);
-  padding: 12px;
-}
-.graph-legend {
-  display: flex;
-  gap: 16px;
-  margin-bottom: 8px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-}
-.legend-item { display: flex; align-items: center; gap: 4px; }
-.legend-item.hbond { color: #fbbf24; }
-.legend-item.ionic { color: #3b82f6; }
-.legend-item.pipi  { color: #a855f7; }
-.legend-item.hydro { color: #34d399; }
-.node-label {
-  font-size: 9px;
-  fill: #e2e8f0;
-  text-anchor: middle;
-  dominant-baseline: central;
-  pointer-events: none;
 }
 
 /* ── Loading spinner ─────────────────────────────────────────────────────── */
