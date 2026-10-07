@@ -1,9 +1,9 @@
 /* ── Properties tab (Phase 8a extraction, logic unchanged from Phase 5) ──── */
 export function fmtCharge(v) { return v >= 0 ? `+${v}` : `${v}`; }
 
-export function renderPropertiesTab(r) {
+export function renderPropertiesTab(r, containerId = 'tabProperties') {
   const d = r.descriptors;
-  const el = document.getElementById('tabProperties');
+  const el = document.getElementById(containerId);
   if (!d) {
     el.innerHTML = `<p class="text-muted">Descriptor analysis unavailable.</p>`;
     return;

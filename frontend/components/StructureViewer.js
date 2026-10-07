@@ -55,9 +55,15 @@ export function renderResidueStripHtml(r) {
   }).join('');
 }
 
-export function renderStructureTab(r) {
+export function renderStructureTab(r, containerId = 'tabStructure') {
+  // containerId is parametrized (Phase 8e, for Analyze's reuse) but the
+  // nested ids below (structureViewer/residueStrip/residueInfo) are still
+  // literal constants — safe today because every caller other than
+  // Generate's own tab always has pdb_string=null and returns via the
+  // branch below before reaching them. True multi-instance support (two
+  // real structure viewers live in the DOM at once) is Phase 8h's job.
   lastResult = r;
-  const el = document.getElementById('tabStructure');
+  const el = document.getElementById(containerId);
   if (!r.pdb_string) {
     el.innerHTML = `<p class="text-muted">${r.plddt_interp || 'Structural analysis unavailable. The peptide result is still complete.'}</p>`;
     return;

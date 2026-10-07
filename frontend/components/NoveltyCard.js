@@ -33,12 +33,19 @@ function sourceLabel(source) {
   return '–';
 }
 
-export function renderNoveltyTab(r) {
-  const el = document.getElementById('tabNovelty');
+export function renderNoveltyTab(r, containerId = 'tabNovelty') {
+  const el = document.getElementById(containerId);
 
-  // No candidate sequence at all — post-hoc analysis (of any kind) never ran.
-  if (!r.sequence) {
-    el.innerHTML = `<p class="text-muted">Novelty analysis not performed in this run.</p>`;
+  // Whether novelty_tool/blast_novelty_tool was even attempted for this
+  // result. Generate always attempts it once a candidate sequence exists
+  // (so this defaults to !!r.sequence, preserving that exact behavior);
+  // other callers — e.g. Analyze (Phase 8e), which only ever calls /score
+  // and /explain and never touches novelty at all — set this explicitly
+  // to false with a specific reason, rather than falling into the "ran but
+  // found nothing" branch below and showing an inaccurate BLAST message.
+  const checked = r.novelty_checked !== undefined ? r.novelty_checked : !!r.sequence;
+  if (!checked) {
+    el.innerHTML = `<p class="text-muted">${r.novelty_not_checked_reason || 'Novelty analysis not performed in this run.'}</p>`;
     return;
   }
 

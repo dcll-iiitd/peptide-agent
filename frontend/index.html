@@ -254,7 +254,7 @@ e.g. Generate an antibacterial peptide with 15–20 residues, charge +2 to +5, h
             <div class="hero-divider"></div>
             <div class="best-candidate-actions">
               <button class="btn-chip" onclick="copySequence()">Copy</button>
-              <button class="btn-chip" onclick="navigateTo('analyze')">Analyze</button>
+              <button class="btn-chip" onclick="analyzeCandidate()">Analyze</button>
               <button class="btn-chip" onclick="navigateTo('compare')">Compare</button>
               <button class="btn-chip" onclick="refineCandidate()">Refine</button>
               <button class="btn-chip" onclick="exportFasta()">Export</button>
@@ -285,13 +285,7 @@ e.g. Generate an antibacterial peptide with 15–20 residues, charge +2 to +5, h
         </div>
       </section>
 
-      <section class="view" data-view="analyze" id="view-analyze">
-        <div class="view-placeholder">
-          <h2>🔬 Analyze</h2>
-          <p>Sequence analysis workflow — deferred post-paper per
-            frontend_phase2_decisions.md.</p>
-        </div>
-      </section>
+      <section class="view" data-view="analyze" id="view-analyze"></section>
 
       <section class="view" data-view="compare" id="view-compare">
         <div class="view-placeholder">

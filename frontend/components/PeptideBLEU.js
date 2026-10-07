@@ -10,8 +10,8 @@ const COMPONENT_LABELS = {
   blosum: 'BLOSUM62',
 };
 
-export function renderPeptideBleuTab(r) {
-  const el = document.getElementById('tabPeptidebleu');
+export function renderPeptideBleuTab(r, containerId = 'tabPeptidebleu') {
+  const el = document.getElementById(containerId);
   const comp = r.components || {};
   if (Object.keys(comp).length === 0) {
     el.innerHTML = `<p class="text-muted">${r.reference_used ? 'No component breakdown available.' : 'No reference — PeptideBLEU not computed.'}</p>`;

@@ -7,11 +7,17 @@ import { health } from './services/api.js';
 import { getExperiments } from './services/history.js';
 import { renderHistoryView } from './pages/HistoryPage.js';
 import { initGeneratePage } from './pages/GeneratePage.js';
+import { renderAnalyzeView } from './pages/AnalyzePage.js';
 
 /* ── Router + sidebar ──────────────────────────────────────────────────── */
 const VIEWS = ['generate', 'analyze', 'compare', 'score', 'history'];
 
-function navigateTo(view) {
+// Minimal "router state" hand-off (frontend_phase8i_actions.md's "simple
+// router state object — no URL routing needed"), built out now only as
+// far as Analyze's entry point from a candidate result needs (Phase 8e);
+// Compare's equivalent pre-population lands in Phase 8i reusing this same
+// `state` param. Pass undefined for a plain nav-item click (no prefill).
+function navigateTo(view, state) {
   if (!VIEWS.includes(view)) view = 'generate';
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.view === view);
@@ -20,6 +26,7 @@ function navigateTo(view) {
     el.classList.toggle('active', el.dataset.view === view);
   });
   if (view === 'history') renderHistoryView();
+  if (view === 'analyze') renderAnalyzeView((state && state.sequence) || null);
   if (window.innerWidth <= 768) {
     document.getElementById('sidebar').classList.remove('drawer-open');
   }

@@ -401,6 +401,20 @@ html, body {
   margin-bottom: 16px;
 }
 
+/* ── Analyze page — Phase 8e ──────────────────────────────────────────────── */
+.analyze-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: center;
+  margin: -6px 0 18px;
+}
+.analyze-ref-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin: 10px 0 4px;
+}
+
 .quick-actions-row {
   display: flex;
   justify-content: center;

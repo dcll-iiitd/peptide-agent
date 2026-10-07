@@ -503,6 +503,11 @@ function showBestCandidate(result) {
   document.getElementById('resultTabsCard').style.display = 'block';
 }
 
+function analyzeCandidate() {
+  const seq = currentResult && currentResult.sequence;
+  window.navigateTo('analyze', seq ? { sequence: seq } : undefined);
+}
+
 function refineCandidate() {
   const spec = currentSpec;
   const seq = currentResult && currentResult.sequence;
@@ -651,4 +656,5 @@ window.exportFasta = exportFasta;
 window.switchResultTab = switchResultTab;
 window.hitlDecide = hitlDecide;
 window.refineCandidate = refineCandidate;
+window.analyzeCandidate = analyzeCandidate;
 window.retryGeneration = retryGeneration;
