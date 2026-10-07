@@ -17,7 +17,7 @@ import { showHitlPanel, hideHitlPanel } from '../components/HITLPanel.js';
 import { renderHeroCard } from '../components/CandidateCard.js';
 import { renderPropertiesTab, fmtCharge } from '../components/PropertyCard.js';
 import { renderPeptideBleuTab } from '../components/PeptideBLEU.js';
-import { renderStructureTab } from '../components/StructureViewer.js';
+import { renderStructureCard } from '../components/StructureViewer.js';
 import { renderNoveltyTab } from '../components/NoveltyCard.js';
 import { renderViolationsHtml } from '../components/DiagnosticCard.js';
 
@@ -494,7 +494,17 @@ function showBestCandidate(result) {
   renderOverviewTab(r);
   renderPropertiesTab(r);
   renderPeptideBleuTab(r);
-  renderStructureTab(r);
+  renderStructureCard('tabStructure', {
+    pdbString: r.pdb_string,
+    meanPlddt: r.plddt_score,
+    confidenceLabel: r.plddt_confidence,
+    helixPct: r.helix_pct,
+    sheetPct: r.sheet_pct,
+    coilPct: r.coil_pct,
+    ssString: r.ss_string,
+    sequence: r.sequence,
+    error: r.plddt_interp,
+  });
   renderNoveltyTab(r);
   renderTraceTab(r);
 

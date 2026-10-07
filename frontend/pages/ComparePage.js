@@ -19,15 +19,18 @@
    /compare call for identical cost. /compare itself is never called.
 
    pLDDT/pdb and novelty are NOT available from /score either (same gap
-   confirmed in Phase 8e for /score and /explain) — the Structure section
-   below therefore always renders its "not available" branch; per
-   "Never show fake values" / "Do NOT show structural similarity... it
-   does not currently", no [View structure] button branch is written at
-   all, since there is currently no real data path that could ever reach
-   it. Novelty is omitted from the table entirely for the same reason
+   confirmed in Phase 8e for /score and /explain). Structure (Phase 8h)
+   is rendered through the real shared StructureViewer component for
+   both candidates — not hardcoded inline text — but since pdbString is
+   always null here, both instances always land on the component's own
+   "not performed" state; per "Never show fake values" / "Do NOT show
+   structural similarity... it does not currently", there's no way to
+   reach its real-viewer branch from this page, so none is fabricated.
+   Novelty is omitted from the table entirely for the same reason
    ("If a field is not in the response, omit the row"). */
 import { slash } from '../services/commands.js';
 import { fmtCharge } from '../components/PropertyCard.js';
+import { renderStructureCard } from '../components/StructureViewer.js';
 
 let compareThreadId = null;
 
@@ -179,17 +182,27 @@ function renderCompareResults(a, b, referenceProvided) {
     <div class="result-card">
       <div class="result-card-header"><span class="result-icon">🧬</span> STRUCTURE</div>
       <div class="compare-structure-row">
-        <div class="compare-structure-col">
-          <span class="spec-label">Candidate A</span>
-          <p class="text-muted">Structure not available</p>
-        </div>
-        <div class="compare-structure-col">
-          <span class="spec-label">Candidate B</span>
-          <p class="text-muted">Structure not available</p>
-        </div>
+        <div class="compare-structure-col" id="compareStructureA"></div>
+        <div class="compare-structure-col" id="compareStructureB"></div>
       </div>
     </div>
   `;
+
+  // pdbString is never available here — /score (what this page actually
+  // calls, see header comment) never returns one — so both instances
+  // always render the shared component's own "not performed" state.
+  // Routed through the real component rather than duplicating that text
+  // inline, so there is exactly one place this message is ever written.
+  renderStructureCard('compareStructureA', {
+    pdbString: null,
+    sequence: (a && a.sequence) || '',
+    candidateLabel: 'Candidate A',
+  });
+  renderStructureCard('compareStructureB', {
+    pdbString: null,
+    sequence: (b && b.sequence) || '',
+    candidateLabel: 'Candidate B',
+  });
 }
 
 window.startCompare = startCompare;

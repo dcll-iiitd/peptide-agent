@@ -1,14 +1,23 @@
-/* ── 3Dmol.js structure viewer + DSSP bars + residue strip (Phase 8a
-   extraction, logic unchanged from Phase 5). Module-local state
-   (currentPdb/structureViewer/lastResult) replaces what were page-global
-   variables in the old monolithic app.js — same lifetime, just scoped to
-   this file since only its own exports touch them. lastResult is set once
-   per renderStructureTab() call (i.e. once per finished generation,
-   before any residue chip could be clicked), so inspectResidue() always
-   reads the result that produced the strip it was clicked from. */
-let currentPdb = null;
-let structureViewer = null;
-let lastResult = null;
+/* ── StructureViewer shared component (Phase 8h) ──────────────────────────
+   One component, genuinely multi-instance: used by Generate's Structure
+   tab, Analyze, and Compare (two simultaneous instances, Candidate A/B) —
+   per-instance state is keyed by containerId in `instances`, replacing
+   the old single-instance module-level currentPdb/structureViewer/
+   lastResult (which only ever worked because, before this phase, every
+   caller except Generate always had pdbString=null and returned before
+   creating a real viewer at all).
+
+   Interface matches frontend_phase8h_structure.md's prop list, adapted
+   to vanilla JS as renderStructureCard(containerId, props) — a plain
+   object of named props rather than a framework component, writing into
+   a container element the caller already put in the DOM, exactly like
+   every other shared component in this codebase (PropertyCard,
+   PeptideBLEU, NoveltyCard).
+
+   pdb field-name normalization (harness=pdb_string, legacy=plddt_pdb)
+   happens in the page that calls this component (GeneratePage.js's
+   normalizeResult()), per the doc's explicit instruction — not here. */
+const instances = new Map(); // containerId -> { viewer, pdbString, sequence, ssString }
 
 export const AA_NAMES = {
   A: 'Alanine', R: 'Arginine', N: 'Asparagine', D: 'Aspartate', C: 'Cysteine',
@@ -30,6 +39,27 @@ const SS_BAR_LABELS = {
   coil_pct: 'Coil',
 };
 
+// Real tiers verified against backend/esmfold_scorer.py's _build_result()/
+// _empty() — "very_high"(>=90)/"high"(>=70)/"low"(>=50)/"very_low"(<50)/
+// "unknown" (on failure). frontend_phase8h_structure.md's mockup says
+// "Very High / High / Medium / Low" with "green >70, amber 50-70, red
+// <50" — there is no "medium" tier and no 3-band split in the real data,
+// so this uses the actual 4 tiers instead of fabricating a "medium" the
+// backend never produces.
+const PLDDT_TIERS = {
+  very_high: { label: 'Very High', color: '#00e5c3' },
+  high: { label: 'High', color: '#34d399' },
+  low: { label: 'Low', color: '#fbbf24' },
+  very_low: { label: 'Very Low', color: '#ef4444' },
+  unknown: { label: 'Unknown', color: '#64748b' },
+};
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
 export function renderSsBarsHtml(r) {
   if (!r.dssp_available || r.helix_pct == null) {
     return `<p class="text-muted">Predicted secondary structure not available.</p>`;
@@ -43,60 +73,99 @@ export function renderSsBarsHtml(r) {
   return bar('helix_pct', r.helix_pct) + bar('sheet_pct', r.sheet_pct) + bar('coil_pct', r.coil_pct);
 }
 
-export function renderResidueStripHtml(r) {
-  if (!r.ss_string) return `<p class="text-muted">Per-residue structure not available.</p>`;
-  const seq = r.sequence || '';
-  return r.ss_string.split('').map((c, i) => {
-    // pydssp 3-state codes, verified against backend/dssp_scorer.py: 'H' =
-    // helix, 'E' = sheet, everything else (incl. '-') = coil.
+function renderConfidenceHtml(meanPlddt, confidenceLabel) {
+  if (meanPlddt == null) {
+    return `<p class="text-muted">Confidence not available.</p>`;
+  }
+  const tier = PLDDT_TIERS[confidenceLabel] || PLDDT_TIERS.unknown;
+  return `
+    <div class="plddt-hero-row">
+      <span class="plddt-hero-value" style="color:${tier.color}">${meanPlddt.toFixed(1)}</span>
+      <span class="plddt-badge" style="background:${tier.color}22;color:${tier.color};border-color:${tier.color}">${tier.label}</span>
+    </div>
+  `;
+}
+
+function renderResidueStripHtml(ssString, sequence, containerId) {
+  // pydssp 3-state codes, verified against backend/dssp_scorer.py: 'H' =
+  // helix, 'E' = sheet, everything else (incl. '-') = coil.
+  return ssString.split('').map((c, i) => {
     const cls = c === 'H' ? 'residue-helix' : c === 'E' ? 'residue-sheet' : 'residue-coil';
-    const aa = seq[i] || '?';
-    return `<span class="residue-chip ${cls}" onclick="inspectResidue(${i})">${aa}</span>`;
+    const aa = (sequence || '')[i] || '?';
+    return `<span class="residue-chip ${cls}" onclick="inspectResidue('${containerId}', ${i})">${aa}</span>`;
   }).join('');
 }
 
-export function renderStructureTab(r, containerId = 'tabStructure') {
-  // containerId is parametrized (Phase 8e, for Analyze's reuse) but the
-  // nested ids below (structureViewer/residueStrip/residueInfo) are still
-  // literal constants — safe today because every caller other than
-  // Generate's own tab always has pdb_string=null and returns via the
-  // branch below before reaching them. True multi-instance support (two
-  // real structure viewers live in the DOM at once) is Phase 8h's job.
-  lastResult = r;
+/* ── Main entry point ──────────────────────────────────────────────────────── */
+export function renderStructureCard(containerId, props) {
+  const {
+    pdbString = null,
+    meanPlddt = null,
+    confidenceLabel = null,
+    helixPct = null,
+    sheetPct = null,
+    coilPct = null,
+    ssString = null,
+    sequence = '',
+    candidateLabel = '',
+    isLoading = false,
+    error = null,
+  } = props || {};
+
   const el = document.getElementById(containerId);
-  if (!r.pdb_string) {
-    el.innerHTML = `<p class="text-muted">${r.plddt_interp || 'Structural analysis unavailable. The peptide result is still complete.'}</p>`;
+  if (!el) return;
+
+  const labelHtml = candidateLabel ? `<div class="structure-candidate-label">${escapeHtml(candidateLabel)}</div>` : '';
+
+  if (isLoading) {
+    el.innerHTML = `${labelHtml}<div class="structure-loading"><span class="spinner"></span> Predicting structure...</div>`;
     return;
   }
 
+  if (!pdbString) {
+    el.innerHTML = labelHtml + (error
+      ? `<p class="text-muted">Structure unavailable: ${escapeHtml(error)}</p>`
+      : `<p class="text-muted">Structural prediction was not performed for this candidate.</p>`);
+    return;
+  }
+
+  instances.set(containerId, { viewer: null, pdbString, sequence, ssString });
+
+  const viewerId = `${containerId}-viewer`;
+  const stripId = `${containerId}-residueStrip`;
+  const infoId = `${containerId}-residueInfo`;
+
   el.innerHTML = `
+    ${labelHtml}
     <div class="structure-layout">
       <div class="structure-viewer-col">
-        <div class="structure-viewer" id="structureViewer"></div>
+        <div class="structure-viewer-label">Predicted structure (ESMFold)</div>
+        <div class="structure-viewer" id="${viewerId}"></div>
         <div class="structure-viewer-actions">
-          <button class="btn-chip" onclick="resetStructureView()">Reset</button>
-          <button class="btn-chip" onclick="downloadPdb()">Download PDB</button>
+          <button class="btn-chip" onclick="resetStructureView('${containerId}')">Reset</button>
+          <button class="btn-chip" onclick="toggleStructureFullscreen('${containerId}')">Fullscreen</button>
+          <button class="btn-chip" onclick="downloadStructurePdb('${containerId}')">Download PDB</button>
         </div>
       </div>
       <div class="structure-info-col">
-        <div class="tab-section-label">STRUCTURAL CONFIDENCE</div>
-        <div class="spec-row"><span class="spec-label">ESMFold pLDDT</span><span class="spec-value">${r.plddt_score != null ? r.plddt_score.toFixed(1) : '–'}</span></div>
-        <div class="spec-row"><span class="spec-label">Confidence</span><span class="spec-value">${r.plddt_confidence || '–'}</span></div>
+        <div class="tab-section-label">ESMFOLD PLDDT</div>
+        ${renderConfidenceHtml(meanPlddt, confidenceLabel)}
         <div class="tab-section-label" style="margin-top:14px">PREDICTED SECONDARY STRUCTURE (DSSP)</div>
-        ${renderSsBarsHtml(r)}
+        ${renderSsBarsHtml({ dssp_available: helixPct != null, helix_pct: helixPct, sheet_pct: sheetPct, coil_pct: coilPct })}
       </div>
     </div>
-    <div class="tab-section-label" style="margin-top:16px">RESIDUE INSPECTION</div>
-    <div id="residueStrip" class="residue-strip">${renderResidueStripHtml(r)}</div>
-    <div id="residueInfo" class="residue-info">Select a residue above to inspect it.</div>
+    ${ssString ? `
+      <div class="tab-section-label" style="margin-top:16px">RESIDUE INSPECTION</div>
+      <div id="${stripId}" class="residue-strip">${renderResidueStripHtml(ssString, sequence, containerId)}</div>
+      <div id="${infoId}" class="residue-info">Select a residue above to inspect it.</div>
+    ` : ''}
   `;
 
-  renderStructureViewer(r.pdb_string);
+  createViewer(containerId, pdbString);
 }
 
-export function renderStructureViewer(pdbText) {
-  currentPdb = pdbText || null;
-  const container = document.getElementById('structureViewer');
+function createViewer(containerId, pdbText) {
+  const container = document.getElementById(`${containerId}-viewer`);
   if (!container) return;
   container.innerHTML = '';
 
@@ -105,10 +174,16 @@ export function renderStructureViewer(pdbText) {
     return;
   }
 
-  structureViewer = $3Dmol.createViewer(container, { backgroundColor: '#000000' });
-  structureViewer.addModel(pdbText, 'pdb');
-  structureViewer.setStyle({}, {
+  const viewer = $3Dmol.createViewer(container, { backgroundColor: '#000000' });
+  viewer.addModel(pdbText, 'pdb');
+  viewer.setStyle({}, {
     cartoon: {
+      // Colors by per-residue B-factor, which ESMFold's output PDB uses
+      // to carry pLDDT confidence (standard AlphaFold/ESMFold convention)
+      // — kept over frontend_phase8h_structure.md's plainer "color:
+      // spectrum" (rainbow-by-chain-position, ignores confidence
+      // entirely) since this is strictly more informative for the same
+      // "Predicted structure (ESMFold)" view and was already built/tested.
       colorfunc: (atom) => {
         const b = atom.b;
         if (b >= 90) return '#00e5c3';
@@ -118,22 +193,52 @@ export function renderStructureViewer(pdbText) {
       },
     },
   });
-  structureViewer.zoomTo();
-  structureViewer.render();
+  viewer.zoomTo();
+  viewer.render();
+
+  const inst = instances.get(containerId);
+  if (inst) inst.viewer = viewer;
 }
 
-export function resetStructureView() {
-  if (!structureViewer) return;
-  structureViewer.zoomTo();
-  structureViewer.render();
+/* ── Per-instance actions (window-exposed for inline onclick) ────────────── */
+export function resetStructureView(containerId) {
+  const inst = instances.get(containerId);
+  if (!inst || !inst.viewer) return;
+  inst.viewer.zoomTo();
+  inst.viewer.render();
 }
 
-export function inspectResidue(index) {
-  const r = lastResult;
-  const info = document.getElementById('residueInfo');
-  if (!r || !info) return;
-  const aa = (r.sequence || '')[index] || '?';
-  const code = r.ss_string ? r.ss_string[index] : null;
+export function toggleStructureFullscreen(containerId) {
+  const viewerEl = document.getElementById(`${containerId}-viewer`);
+  if (!viewerEl) return;
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else if (viewerEl.requestFullscreen) {
+    viewerEl.requestFullscreen();
+  }
+}
+
+export function downloadStructurePdb(containerId) {
+  const inst = instances.get(containerId);
+  if (!inst || !inst.pdbString) return;
+  const blob = new Blob([inst.pdbString], { type: 'chemical/x-pdb' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const seqPrefix = (inst.sequence || 'structure').slice(0, 10);
+  a.download = `pepforge_candidate_${seqPrefix}.pdb`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export function inspectResidue(containerId, index) {
+  const inst = instances.get(containerId);
+  const info = document.getElementById(`${containerId}-residueInfo`);
+  if (!inst || !info) return;
+  const aa = (inst.sequence || '')[index] || '?';
+  const code = inst.ssString ? inst.ssString[index] : null;
   const ssLabel = code === 'H' ? 'Helix' : code === 'E' ? 'Sheet' : code ? 'Coil' : 'Not available';
   info.innerHTML = `
     <div class="spec-row"><span class="spec-label">Residue</span><span class="spec-value">${index + 1}</span></div>
@@ -143,20 +248,7 @@ export function inspectResidue(index) {
   `;
 }
 
-export function downloadPdb() {
-  if (!currentPdb) return;
-  const blob = new Blob([currentPdb], { type: 'chemical/x-pdb' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  const seq = document.getElementById('resultSequence')?.textContent.trim();
-  a.download = `${seq || 'structure'}.pdb`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
 window.resetStructureView = resetStructureView;
-window.downloadPdb = downloadPdb;
+window.toggleStructureFullscreen = toggleStructureFullscreen;
+window.downloadStructurePdb = downloadStructurePdb;
 window.inspectResidue = inspectResidue;

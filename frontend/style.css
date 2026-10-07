@@ -448,7 +448,6 @@ html, body {
   gap: 14px;
 }
 .compare-structure-col { text-align: center; }
-.compare-structure-col .spec-label { display: block; margin-bottom: 4px; }
 
 @media (max-width: 768px) {
   .compare-input-grid, .compare-structure-row { grid-template-columns: 1fr; }
@@ -743,19 +742,33 @@ html, body {
   white-space: nowrap;
 }
 
-/* ── Structure tab ────────────────────────────────────────────────────────── */
+/* ── Structure tab / StructureViewer shared component — Phase 8h ─────────── */
 .structure-layout { display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px; }
 .structure-viewer-col { display: flex; flex-direction: column; gap: 8px; }
 .structure-viewer-actions { display: flex; gap: 8px; }
+.structure-viewer-label { font-size: 11px; color: var(--text-secondary); letter-spacing: 0.03em; }
+.structure-candidate-label { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+.structure-loading { display: flex; align-items: center; font-size: 12.5px; color: var(--text-secondary); padding: 10px 0; }
+.plddt-hero-row { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.plddt-hero-value { font-family: var(--font-mono); font-size: 28px; font-weight: 700; }
+.plddt-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
 .structure-info-col { display: flex; flex-direction: column; }
 
 .residue-strip {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
   gap: 2px;
   font-family: var(--font-mono);
   font-size: 11px;
   margin-bottom: 10px;
+  padding-bottom: 4px;
 }
 .residue-chip {
   display: inline-flex;
@@ -763,6 +776,7 @@ html, body {
   justify-content: center;
   width: 18px;
   height: 18px;
+  flex-shrink: 0;
   border-radius: 3px;
   cursor: pointer;
   color: #04131a;
@@ -1091,6 +1105,7 @@ html, body {
   background: #000;
   position: relative;
 }
+.structure-viewer:fullscreen { height: 100vh; border-radius: 0; }
 
 /* ── Loading spinner ─────────────────────────────────────────────────────── */
 @keyframes spin { to { transform: rotate(360deg); } }

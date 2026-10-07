@@ -30,7 +30,7 @@ import { slash } from '../services/commands.js';
 import { renderPropertiesTab } from '../components/PropertyCard.js';
 import { renderPeptideBleuTab } from '../components/PeptideBLEU.js';
 import { renderViolationsHtml } from '../components/DiagnosticCard.js';
-import { renderStructureTab } from '../components/StructureViewer.js';
+import { renderStructureCard } from '../components/StructureViewer.js';
 import { renderNoveltyTab } from '../components/NoveltyCard.js';
 
 let analyzeThreadId = null;
@@ -225,11 +225,11 @@ function renderAnalyzeResults(seq, reference, scoreResult, explainResult) {
     reference_used: reference || '',
   }, 'analyzeBleuSection');
 
-  renderStructureTab({
-    pdb_string: null,
-    plddt_interp: 'Structural analysis is not available for the Analyze workflow — ESMFold only runs as part of a full generation.',
+  renderStructureCard('analyzeStructureSection', {
+    pdbString: null,
     sequence: seq,
-  }, 'analyzeStructureSection');
+    error: 'ESMFold only runs as part of a full generation — not available in Analyze.',
+  });
 
   renderNoveltyTab({
     sequence: seq,
