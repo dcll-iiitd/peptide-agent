@@ -587,6 +587,9 @@ html, body {
 
 .novelty-badge-row { margin-bottom: 10px; }
 .novelty-label { font-size: 16px; font-weight: 700; }
+.mono-seq { font-family: var(--font-mono); }
+.mono-seq.expandable { cursor: pointer; }
+.mono-seq.expandable:hover { color: var(--cyan); }
 
 .edit-op-detail {
   margin-left: auto;

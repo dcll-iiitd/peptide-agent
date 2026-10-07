@@ -467,9 +467,18 @@ function normalizeResult(result) {
 
     novelty_score: blast ? blast.similarity_score : result.novelty_score,
     novelty_label: blast ? blast.novelty_label : result.novelty_label,
+    // Phase 8c (frontend_phase8c_novelty.md) — harness/graph.py's
+    // post_hoc_node now calls novelty_tool for real; novelty_source is
+    // "blast" or "faiss_fallback" from its new "source" field
+    // (harness/novelty.py). Legacy has no FAISS fallback at all, so its
+    // only source is "blast" when blast_available, else null.
+    novelty_source: blast ? (blast.blast_available ? 'blast' : null) : result.novelty_source,
+    novelty_is_legacy: !!blast,
     novelty_interp: blast ? blast.interpretation : null,
     novelty_available: blast ? !!blast.blast_available : (result.novelty_score != null),
-    closest_match: result.closest_match || null,
+    // Legacy's blast_similarity has no closest_match field at all (spec:
+    // "show 'Not available'") — only the harness path can ever have one.
+    closest_match: blast ? null : (result.closest_match || null),
 
     activity: (currentSpec && currentSpec.activity) || '',
   };
