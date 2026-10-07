@@ -247,10 +247,91 @@ html, body {
   background: var(--bg-card2);
   border: 1px solid var(--border);
   padding: 10px 12px;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  transition: opacity 0.25s ease, transform 0.25s ease;
 }
 .history-item:hover { border-color: var(--cyan-dim); }
 .history-item .experiment-seq { font-size: 13px; }
 .history-item .experiment-meta { font-size: 11px; margin-top: 2px; }
+.history-item-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.history-item.fade-out { opacity: 0; transform: translateX(8px); }
+
+/* ── Per-item [⋮] dropdown — Phase 8d ─────────────────────────────────────── */
+.history-item-menu-wrap { position: relative; flex-shrink: 0; }
+.history-item-menu-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.history-item-menu-btn:hover { background: var(--bg-card); border-color: var(--border); color: var(--text-primary); }
+.history-item-dropdown {
+  position: absolute;
+  right: 0;
+  top: 28px;
+  min-width: 110px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  z-index: 20;
+  overflow: hidden;
+}
+.history-dropdown-item { padding: 8px 12px; font-size: 12px; color: var(--text-primary); cursor: pointer; }
+.history-dropdown-item:hover { background: var(--bg-card2); }
+.history-dropdown-item.destructive { color: var(--red); }
+.history-dropdown-sep { border-top: 1px solid var(--border-light); }
+
+/* ── Delete confirmation dialog — Phase 8d ────────────────────────────────── */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.confirm-dialog {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  max-width: 360px;
+  width: 90%;
+}
+.confirm-title { font-size: 15px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px; }
+.confirm-body { font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 18px; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.btn-destructive { background: var(--red); border-color: var(--red); color: #fff; }
+.btn-destructive:hover { background: #d93838; }
+
+/* ── Toast — Phase 8d ──────────────────────────────────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translate(-50%, 10px);
+  opacity: 0;
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 10px 18px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 110;
+}
+.toast.toast-visible { opacity: 1; transform: translate(-50%, 0); }
 
 /* ── Sidebar footer ──────────────────────────────────────────────────────── */
 .sidebar-footer {

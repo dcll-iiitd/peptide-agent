@@ -33,3 +33,9 @@ export function saveExperiment(result, spec) {
 export function getExperiment(threadId) {
   return getExperiments().find(e => e.thread_id === threadId) || null;
 }
+
+export function deleteExperiment(threadId) {
+  const experiments = getExperiments().filter(e => e.thread_id !== threadId);
+  try { localStorage.setItem(EXPERIMENTS_KEY, JSON.stringify(experiments)); } catch { /* storage unavailable */ }
+  return experiments;
+}
