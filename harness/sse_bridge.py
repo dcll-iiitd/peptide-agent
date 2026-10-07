@@ -166,6 +166,11 @@ def _build_final_event(state: dict, elapsed: float) -> dict:
             # — closes the harness/legacy Structure+Novelty field gap
             # documented in frontend/AUDIT.md Q17-19.
             "plddt_confidence": state.get("plddt_confidence"),
+            # Phase 8h (frontend_phase8h_structure.md) — real failure-reason
+            # string for StructureViewer's "Structure unavailable: [error]"
+            # state; previously absent on this path (legacy's equivalent is
+            # plddt_interp, same name, read by server.py already).
+            "plddt_interp": state.get("plddt_interp"),
             "pdb_string": state.get("pdb_string"),
             "sheet_pct": state.get("sheet_pct"),
             "coil_pct": state.get("coil_pct"),

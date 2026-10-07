@@ -522,6 +522,13 @@ def post_hoc_node(state: AgentState) -> dict:
         # needed correcting.
         "pdb_string": pdb,
         "plddt_confidence": plddt_result.get("confidence"),
+        # Phase 8h (frontend_phase8h_structure.md) — same key
+        # ("interpretation") backend/esmfold_scorer.py's get_plddt() already
+        # uses for both the success and _empty(error) failure paths (legacy
+        # path's server.py already reads this into plddt_interp); harness
+        # previously dropped it entirely, leaving no real reason string for
+        # a failed structure prediction on this path.
+        "plddt_interp": plddt_result.get("interpretation"),
         "novelty_score": novelty_score,
         "closest_match": closest_match,
         "novelty_label": novelty_label,

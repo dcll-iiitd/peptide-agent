@@ -109,6 +109,10 @@ class AgentState(TypedDict):
     # Structure+Novelty field gap documented in frontend/AUDIT.md Q17-19.
     pdb_string: Optional[str]
     plddt_confidence: Optional[str]
+    # Phase 8h (frontend_phase8h_structure.md) — real reason string when
+    # pLDDT/ESMFold fails (same "interpretation" key legacy's plddt_interp
+    # already surfaces); was previously dropped entirely on this path.
+    plddt_interp: Optional[str]
     sheet_pct: Optional[float]
     coil_pct: Optional[float]
     novelty_label: Optional[str]
@@ -179,6 +183,7 @@ def create_initial_state(**overrides) -> AgentState:
         "closest_match": None,
         "pdb_string": None,
         "plddt_confidence": None,
+        "plddt_interp": None,
         "sheet_pct": None,
         "coil_pct": None,
         "novelty_label": None,
