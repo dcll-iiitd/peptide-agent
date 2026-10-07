@@ -107,14 +107,16 @@ class AgentState(TypedDict):
     closest_match: Optional[str]
     # Frontend redesign Phase 2 decision 2 — close the harness/legacy
     # Structure+Novelty field gap documented in frontend/AUDIT.md Q17-19.
-    # novelty_label stays None for now (see sse_bridge.py note): wiring
-    # blast_novelty_tool into the graph is a larger architectural change,
-    # out of scope here.
     pdb_string: Optional[str]
     plddt_confidence: Optional[str]
     sheet_pct: Optional[float]
     coil_pct: Optional[float]
     novelty_label: Optional[str]
+    # Phase 8c (frontend_phase8c_novelty.md) — "blast" or "faiss_fallback",
+    # from novelty_tool's new "source" field (harness/novelty.py), so the
+    # UI can label FAISS-fallback results as a property-space nearest
+    # neighbor rather than true sequence alignment.
+    novelty_source: Optional[str]
     # Decision 8 — per-residue secondary structure string (e.g. "HHHCCSS...")
     # for the Structure tab's residue strip. Confirmed present on dssp_tool's
     # return dict (backend/dssp_scorer.py) before adding this field.
@@ -180,6 +182,7 @@ def create_initial_state(**overrides) -> AgentState:
         "sheet_pct": None,
         "coil_pct": None,
         "novelty_label": None,
+        "novelty_source": None,
         "ss_string": None,
         "early_stop": False,
         "error": None,

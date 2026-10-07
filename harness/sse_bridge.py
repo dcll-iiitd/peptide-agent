@@ -164,11 +164,7 @@ def _build_final_event(state: dict, elapsed: float) -> dict:
             "helix_pct": state.get("helix_pct"),
             # Frontend redesign Phase 2 decision 2 (frontend_phase2_decisions.md)
             # — closes the harness/legacy Structure+Novelty field gap
-            # documented in frontend/AUDIT.md Q17-19. novelty_score/
-            # closest_match/novelty_label stay None — harness/graph.py's
-            # post_hoc_node never calls blast_novelty_tool, intentionally
-            # out of scope here; the frontend shows a graceful "unavailable"
-            # state for novelty in harness mode instead.
+            # documented in frontend/AUDIT.md Q17-19.
             "plddt_confidence": state.get("plddt_confidence"),
             "pdb_string": state.get("pdb_string"),
             "sheet_pct": state.get("sheet_pct"),
@@ -177,9 +173,13 @@ def _build_final_event(state: dict, elapsed: float) -> dict:
             # Structure tab's residue strip (confirmed present on
             # dssp_tool's return dict before adding this).
             "ss_string": state.get("ss_string"),
+            # Phase 8c (frontend_phase8c_novelty.md) — harness/graph.py's
+            # post_hoc_node now calls novelty_tool for real (previously
+            # hardcoded None here with a "not wired" comment removed above).
             "novelty_score": state.get("novelty_score"),
             "closest_match": state.get("closest_match"),
             "novelty_label": state.get("novelty_label"),
+            "novelty_source": state.get("novelty_source"),
             "status": state.get("status", "unknown"),
             "thread_id": state.get("_thread_id"),
             # {operation_type: {count, improvements, avg_delta}} from

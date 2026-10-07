@@ -70,6 +70,7 @@ def _blast_path(sequence: str) -> dict | None:
             "closest_activity": "unknown",
             "is_novel": similarity < 0.40,
             "database": DATABASE_NAME,
+            "source": "blast",
         }
 
     from harness.descriptor import calculate_descriptors
@@ -84,6 +85,7 @@ def _blast_path(sequence: str) -> dict | None:
         "closest_activity": _lookup_activity_by_sequence(closest_match),
         "is_novel": similarity < 0.40,
         "database": DATABASE_NAME,
+        "source": "blast",
     }
 
 
@@ -116,6 +118,7 @@ def _faiss_fallback(sequence: str) -> dict:
             "closest_activity": "unknown",
             "is_novel": True,
             "database": DATABASE_NAME,
+            "source": "faiss_fallback",
         }
 
     nearest = neighbors[0]
@@ -132,6 +135,7 @@ def _faiss_fallback(sequence: str) -> dict:
         "closest_activity": ", ".join(nearest.get("activities", [])) or "none",
         "is_novel": similarity < 0.40,
         "database": DATABASE_NAME,
+        "source": "faiss_fallback",
     }
 
 
@@ -153,6 +157,7 @@ def assess_novelty_detailed(sequence: str) -> dict:
             "closest_activity": "unknown",
             "is_novel": True,
             "database": DATABASE_NAME,
+            "source": None,
         }
 
     try:

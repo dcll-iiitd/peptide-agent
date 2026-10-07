@@ -29,6 +29,7 @@ from harness.tools import (
     dssp_tool,
     edit_operator_tool,
     esmfold_tool,
+    novelty_tool,
     peptide_bleu_tool,
     rag_retrieval_tool,
     reference_selector_tool,
@@ -495,6 +496,18 @@ def post_hoc_node(state: AgentState) -> dict:
 
     status = "complete" if (state["best_passing"] is not None) else "failed"
 
+    # Phase 8c (frontend_phase8c_novelty.md) — novelty_tool wraps
+    # harness/novelty.py's assess_novelty_detailed(): BLAST against the
+    # local 105K DB, falling back to a FAISS property-space nearest
+    # neighbor if BLAST isn't installed. Never raises (catches internally,
+    # same as esmfold_tool/dssp_tool above) — a failure just yields an
+    # {"error": ...} dict, and every .get() below degrades to None.
+    novelty_result = novelty_tool.invoke({"sequence": sequence})
+    novelty_score = novelty_result.get("similarity")
+    closest_match = novelty_result.get("closest_match") or None
+    novelty_label = novelty_result.get("novelty_label")
+    novelty_source = novelty_result.get("source")
+
     return {
         "plddt_score": plddt_score,
         "helix_pct": helix_pct,
@@ -509,14 +522,10 @@ def post_hoc_node(state: AgentState) -> dict:
         # needed correcting.
         "pdb_string": pdb,
         "plddt_confidence": plddt_result.get("confidence"),
-        # blast_scorer.assess_novelty() has no closest_match field — leaving
-        # novelty_score/closest_match/novelty_label as None here rather than
-        # the tools_spec.md draft's (stale) claim that one exists. Wiring
-        # blast_novelty_tool into the graph is a larger architectural change
-        # than this Phase 2 decision calls for — see frontend_phase2_decisions.md.
-        "novelty_score": None,
-        "closest_match": None,
-        "novelty_label": None,
+        "novelty_score": novelty_score,
+        "closest_match": closest_match,
+        "novelty_label": novelty_label,
+        "novelty_source": novelty_source,
         "status": status,
     }
 
