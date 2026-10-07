@@ -508,6 +508,11 @@ function analyzeCandidate() {
   window.navigateTo('analyze', seq ? { sequence: seq } : undefined);
 }
 
+function compareCandidate() {
+  const seq = currentResult && currentResult.sequence;
+  window.navigateTo('compare', seq ? { candidateA: seq } : undefined);
+}
+
 function refineCandidate() {
   const spec = currentSpec;
   const seq = currentResult && currentResult.sequence;
@@ -657,4 +662,5 @@ window.switchResultTab = switchResultTab;
 window.hitlDecide = hitlDecide;
 window.refineCandidate = refineCandidate;
 window.analyzeCandidate = analyzeCandidate;
+window.compareCandidate = compareCandidate;
 window.retryGeneration = retryGeneration;

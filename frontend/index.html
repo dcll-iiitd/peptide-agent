@@ -255,7 +255,7 @@ e.g. Generate an antibacterial peptide with 15–20 residues, charge +2 to +5, h
             <div class="best-candidate-actions">
               <button class="btn-chip" onclick="copySequence()">Copy</button>
               <button class="btn-chip" onclick="analyzeCandidate()">Analyze</button>
-              <button class="btn-chip" onclick="navigateTo('compare')">Compare</button>
+              <button class="btn-chip" onclick="compareCandidate()">Compare</button>
               <button class="btn-chip" onclick="refineCandidate()">Refine</button>
               <button class="btn-chip" onclick="exportFasta()">Export</button>
             </div>
@@ -287,13 +287,7 @@ e.g. Generate an antibacterial peptide with 15–20 residues, charge +2 to +5, h
 
       <section class="view" data-view="analyze" id="view-analyze"></section>
 
-      <section class="view" data-view="compare" id="view-compare">
-        <div class="view-placeholder">
-          <h2>🧪 Compare</h2>
-          <p>Candidate comparison workflow — deferred post-paper per
-            frontend_phase2_decisions.md.</p>
-        </div>
-      </section>
+      <section class="view" data-view="compare" id="view-compare"></section>
 
       <section class="view" data-view="score" id="view-score">
         <div class="view-placeholder">

@@ -8,15 +8,16 @@ import { getExperiments } from './services/history.js';
 import { renderHistoryView } from './pages/HistoryPage.js';
 import { initGeneratePage } from './pages/GeneratePage.js';
 import { renderAnalyzeView } from './pages/AnalyzePage.js';
+import { renderCompareView } from './pages/ComparePage.js';
 
 /* ── Router + sidebar ──────────────────────────────────────────────────── */
 const VIEWS = ['generate', 'analyze', 'compare', 'score', 'history'];
 
 // Minimal "router state" hand-off (frontend_phase8i_actions.md's "simple
-// router state object — no URL routing needed"), built out now only as
-// far as Analyze's entry point from a candidate result needs (Phase 8e);
-// Compare's equivalent pre-population lands in Phase 8i reusing this same
-// `state` param. Pass undefined for a plain nav-item click (no prefill).
+// router state object — no URL routing needed"), built out as far as each
+// page's own entry point needs: Analyze's (Phase 8e) and Compare's
+// (Phase 8f) candidate-result buttons both reuse this same `state` param.
+// Pass undefined for a plain nav-item click (no prefill).
 function navigateTo(view, state) {
   if (!VIEWS.includes(view)) view = 'generate';
   document.querySelectorAll('.nav-item').forEach(el => {
@@ -27,6 +28,7 @@ function navigateTo(view, state) {
   });
   if (view === 'history') renderHistoryView();
   if (view === 'analyze') renderAnalyzeView((state && state.sequence) || null);
+  if (view === 'compare') renderCompareView((state && state.candidateA) || null);
   if (window.innerWidth <= 768) {
     document.getElementById('sidebar').classList.remove('drawer-open');
   }
