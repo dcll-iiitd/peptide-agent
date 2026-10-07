@@ -9,6 +9,7 @@ import { renderHistoryView } from './pages/HistoryPage.js';
 import { initGeneratePage } from './pages/GeneratePage.js';
 import { renderAnalyzeView } from './pages/AnalyzePage.js';
 import { renderCompareView } from './pages/ComparePage.js';
+import { renderScoreView } from './pages/ScorePage.js';
 
 /* ── Router + sidebar ──────────────────────────────────────────────────── */
 const VIEWS = ['generate', 'analyze', 'compare', 'score', 'history'];
@@ -29,6 +30,7 @@ function navigateTo(view, state) {
   if (view === 'history') renderHistoryView();
   if (view === 'analyze') renderAnalyzeView((state && state.sequence) || null);
   if (view === 'compare') renderCompareView((state && state.candidateA) || null);
+  if (view === 'score') renderScoreView();
   if (window.innerWidth <= 768) {
     document.getElementById('sidebar').classList.remove('drawer-open');
   }

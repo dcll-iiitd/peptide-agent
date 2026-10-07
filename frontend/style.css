@@ -454,6 +454,16 @@ html, body {
   .compare-input-grid, .compare-structure-row { grid-template-columns: 1fr; }
 }
 
+/* ── Score page — Phase 8g ────────────────────────────────────────────────── */
+.score-hero-value {
+  font-family: var(--font-mono);
+  font-size: 40px;
+  font-weight: 700;
+  color: var(--cyan);
+  text-align: center;
+  margin-bottom: 12px;
+}
+
 .quick-actions-row {
   display: flex;
   justify-content: center;

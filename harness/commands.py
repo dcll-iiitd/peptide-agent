@@ -170,7 +170,17 @@ def handle_generate(args: list, thread_id: str) -> dict:
 
 
 def handle_score(args: list) -> dict:
-    """/score SEQUENCE [--ref REFERENCE] [--activity amp]"""
+    """/score SEQUENCE [--ref REFERENCE] [--activity amp]
+
+    --activity accepts either a PeptideBLEU preset code directly (amp/cpp/
+    signal/immunological — unmapped, passed straight through) or a raw
+    frontend activity name (e.g. anti-bacterial), mapped through
+    backend/agent.py's ACTIVITY_PRESET_MAP first. Mirrors harness/graph.py's
+    _preset() so this command's component weighting matches what a full
+    generation run would use for the same activity, instead of silently
+    falling back to ACTIVITY_WEIGHTS['default'] for every raw activity name
+    (frontend_phase8g_score.md gap, confirmed before fixing).
+    """
     positional, options = _parse_options(args)
     if not positional:
         return {"error": "usage: /score SEQUENCE [--ref REFERENCE] [--activity amp]"}
@@ -178,6 +188,10 @@ def handle_score(args: list) -> dict:
     sequence = positional[0].upper()
     reference = options.get("ref", "")
     activity = options.get("activity")
+    if activity:
+        from backend.agent import ACTIVITY_PRESET_MAP
+
+        activity = ACTIVITY_PRESET_MAP.get(activity, activity)
 
     from harness.tools import descriptor_tool, peptide_bleu_tool, rulebook_tool
 
