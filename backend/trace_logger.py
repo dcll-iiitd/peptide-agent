@@ -193,7 +193,14 @@ class TraceLogger:
         # Diffs
         diff_len    = (act_len - tgt_len) if isinstance(tgt_len, int) else None
         diff_charge = int(round(float(act_charge) - float(tgt_charge)))
-        diff_hydro  = round(float(act_hydro) - float(tgt_hydro), 4)
+        # Bug fix: tgt_hydro is a percentage-style target (task's
+        # "hydrophobicity"/ref_hydrophobic_pct keys, 0-100 range), but this
+        # used to diff it against act_hydro, which is validation's GRAVY-
+        # scale Kyte-Doolittle average (can be negative, e.g. -1.731) — two
+        # different metrics on different scales, producing a nonsensical
+        # diff. hydro_pct (validation's own percentage field, already
+        # computed above) is the correct like-for-like comparison.
+        diff_hydro  = round(float(hydro_pct) - float(tgt_hydro), 4)
 
         def cs(key: str) -> str:
             return f"{comp[key]:.4f}" if key in comp else "N/A"
@@ -270,7 +277,7 @@ class TraceLogger:
                 else f"  Length:         target={tgt_len}, actual={act_len}, diff=?"
             ),
             f"  Charge:         target={_charge_sign(tgt_charge)}, actual={_charge_sign(act_charge)}, diff={diff_charge:+d}",
-            f"  Hydrophobicity: target={tgt_hydro:.2f}, actual={act_hydro:.3f}, diff={diff_hydro:+.4f}",
+            f"  Hydrophobicity: target={tgt_hydro:.2f}%, actual={hydro_pct:.1f}%, diff={diff_hydro:+.2f}%",
             "",
             "COMPONENT SCORES",
             f"  N-gram BLEU:         {cs('ngram_bleu')}",
