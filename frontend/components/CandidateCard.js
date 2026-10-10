@@ -14,7 +14,7 @@ export function renderHeroMetricsHtml(r) {
       <span class="hero-metric-val">${r.score.toFixed(4)}</span></div>`);
   }
   rows.push(`<div class="hero-metric-row"><span class="hero-metric-label">Rulebook</span>
-    <span class="hero-metric-val">${r.status === 'complete' ? '✓ Passed' : '○ ' + (r.status || 'unknown')}</span></div>`);
+    <span class="hero-metric-val">${r.rulebook_passed === true ? '✓ Passed' : r.rulebook_passed === false ? '✗ Failed' : '– Unknown'}</span></div>`);
   if (r.novelty_available && r.novelty_label) {
     rows.push(`<div class="hero-metric-row"><span class="hero-metric-label">Novelty</span>
       <span class="hero-metric-val">${r.novelty_label === 'novel' ? '✓ Novel' : r.novelty_label}</span></div>`);

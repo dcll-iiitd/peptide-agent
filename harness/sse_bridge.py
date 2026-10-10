@@ -119,6 +119,12 @@ def _build_final_event(state: dict, elapsed: float) -> dict:
     sequence = best.sequence if best else state.get("current_sequence", "")
     score = best.bleu_score if best else state.get("current_score", 0.0)
     rulebook_score = best.rulebook.fitness if (best and best.rulebook) else None
+    # Bug fix: DiagnosticResult.passed (a real bool) was never serialized —
+    # only .fitness (a float) was. The frontend had no rulebook-specific
+    # pass/fail field to read at all and was reading the graph's overall
+    # run status instead, which is a different concept from "did this
+    # candidate's own rulebook validation pass."
+    rulebook_passed = best.rulebook.passed if (best and best.rulebook) else None
 
     reference = state.get("reference", "")
     components = {}
@@ -144,6 +150,7 @@ def _build_final_event(state: dict, elapsed: float) -> dict:
             "sequence": sequence,
             "score": score,
             "rulebook_score": rulebook_score,
+            "rulebook_passed": rulebook_passed,
             "reference_used": reference_used,
             "components": components,
             "descriptors": {
