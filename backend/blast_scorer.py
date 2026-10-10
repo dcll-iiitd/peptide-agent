@@ -10,17 +10,11 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
+import csv
 import os
 import shutil
 import subprocess
 import tempfile
-
-try:
-    import pandas as pd
-    _PANDAS_OK = True
-except ImportError:
-    pd = None
-    _PANDAS_OK = False
 
 # Paths — DATASET_PATH shares the same env var/default as backend/rag/peptide_retriever.py
 # (data/peptides.csv is the real dataset file in this repo, not peptides_dataset.csv).
@@ -79,10 +73,6 @@ def build_blast_db(
     Only needs to run once — database saved to disk.
     Returns True if successful, False otherwise.
     """
-    if not _PANDAS_OK:
-        print("[BLAST] pandas not available. Cannot build database.")
-        return False
-
     if not _check_makeblastdb_available():
         print("[BLAST] makeblastdb not found. "
               "Install: sudo apt-get install ncbi-blast+")
@@ -94,18 +84,20 @@ def build_blast_db(
 
     try:
         print(f"[BLAST] Building database from {DATASET_PATH}...")
-        df = pd.read_csv(DATASET_PATH)
+        with open(DATASET_PATH, newline='') as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames or []
 
-        # Get sequence column
-        seq_col = None
-        for col in df.columns:
-            if 'seq' in col.lower():
-                seq_col = col
-                break
-        if seq_col is None:
-            seq_col = df.columns[0]
+            # Get sequence column
+            seq_col = None
+            for col in fieldnames:
+                if 'seq' in col.lower():
+                    seq_col = col
+                    break
+            if seq_col is None:
+                seq_col = fieldnames[0]
 
-        peptides = df[seq_col].dropna().tolist()
+            peptides = [row[seq_col] for row in reader if row.get(seq_col)]
 
         # Filter by length and valid AA
         filtered = [
@@ -174,9 +166,6 @@ def assess_novelty(
     if not sequence or not is_natural(sequence):
         return _empty("Invalid sequence")
 
-    if not _PANDAS_OK:
-        return _empty("pandas not available — cannot parse BLAST output")
-
     if not _check_blast_available():
         return _empty(
             "BLAST not installed. "
@@ -237,17 +226,20 @@ def assess_novelty(
                 "qseqid", "sseqid", "pident",
                 "length", "qcovs", "evalue", "bitscore"
             ]
-            df = pd.read_csv(out_path, sep="\t", names=cols)
-            df["similarity_score"] = (
-                (df["pident"] / 100.0) * (df["qcovs"] / 100.0)
+            with open(out_path, newline='') as f:
+                rows = list(csv.DictReader(f, fieldnames=cols, delimiter="\t"))
+
+            for row in rows:
+                row["similarity_score"] = (
+                    (float(row["pident"]) / 100.0) * (float(row["qcovs"]) / 100.0)
+                )
+            rows_sorted = sorted(
+                rows, key=lambda r: r["similarity_score"], reverse=True
             )
-            df_sorted = df.sort_values(
-                "similarity_score", ascending=False
-            )
-            all_scores = df_sorted["similarity_score"].round(4).tolist()
+            all_scores = [round(r["similarity_score"], 4) for r in rows_sorted]
             scores = all_scores[:top_k] if top_k > 0 else all_scores
-            if not df_sorted.empty:
-                top_id = str(df_sorted.iloc[0]["sseqid"])
+            if rows_sorted:
+                top_id = str(rows_sorted[0]["sseqid"])
 
         top_score = scores[0] if scores else 0.0
         closest_sequence = (
