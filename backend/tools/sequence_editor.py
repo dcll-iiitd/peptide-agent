@@ -189,6 +189,13 @@ def inject_reference_motif(sequence: str, reference: str, target_length: int) ->
     if not best_motif:
         return sequence
 
+    # If the motif is already present anywhere in the current sequence,
+    # splicing it in again wouldn't add any new literal overlap with the
+    # reference — skip injection this iteration rather than churn the
+    # sequence (and its charge/hydrophobicity) for no ngram_bleu benefit.
+    if best_motif in sequence.upper():
+        return sequence
+
     # Insert at position 4 (keeps first 4 chars intact) — preserves the
     # opening motif/charge pattern while adding reference similarity.
     insert_pos = min(4, max(0, len(seq) - 4))
