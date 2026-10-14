@@ -1,7 +1,15 @@
 """
 Slash command parser for PepForge harness.
-Week 2: /history
-Week 3: /generate /score /edit /compare /explain
+
+Active slash commands: /generate /score /edit /explain.
+
+/compare and /history were removed from the slash-command surface
+(anticopy_fix.md's sibling request, "remove /compare and /history slash
+commands") — typing either now returns the normal "unknown command" error
+from execute_command() below. handle_compare()/handle_history() themselves
+are NOT deleted: harness/mcp_server.py's compare_peptides/get_history MCP
+tools still import and call them directly as library functions, a separate
+interface from the slash-command chat bar this change targets.
 """
 
 import re
@@ -97,6 +105,10 @@ def handle_history(thread_id: str, n: int = 5) -> list:
     doesn't have, so a full-dict equality check never catches it), before
     that run's own pending->...->terminal chain begins — without deduping
     on the actual result fields, that carried-over snapshot double-counts.
+
+    No longer reachable as a slash command (see module docstring) — kept
+    as a plain function because harness/mcp_server.py's get_history tool
+    still calls it directly.
     """
     from harness.memory import get_session_history
 
@@ -170,35 +182,62 @@ def handle_generate(args: list, thread_id: str) -> dict:
 
 
 def handle_score(args: list) -> dict:
-    """/score SEQUENCE [--ref REFERENCE] [--activity amp]
+    """/score SEQUENCE [ACTIVITY] [--ref REFERENCE] [--activity amp]
 
-    --activity accepts either a PeptideBLEU preset code directly (amp/cpp/
-    signal/immunological — unmapped, passed straight through) or a raw
-    frontend activity name (e.g. anti-bacterial), mapped through
-    backend/agent.py's ACTIVITY_PRESET_MAP first. Mirrors harness/graph.py's
-    _preset() so this command's component weighting matches what a full
-    generation run would use for the same activity, instead of silently
-    falling back to ACTIVITY_WEIGHTS['default'] for every raw activity name
+    --activity (or a bare second positional, e.g. "/score SEQ anti-bacterial")
+    accepts either a PeptideBLEU preset code directly (amp/cpp/signal/
+    immunological — unmapped, passed straight through) or a raw frontend
+    activity name (e.g. anti-bacterial), mapped through backend/agent.py's
+    ACTIVITY_PRESET_MAP first. Mirrors harness/graph.py's _preset() so this
+    command's component weighting matches what a full generation run would
+    use for the same activity, instead of silently falling back to
+    ACTIVITY_WEIGHTS['default'] for every raw activity name
     (frontend_phase8g_score.md gap, confirmed before fixing).
+
+    If --ref is omitted, a reference is auto-selected the same way a real
+    /generate run would — via reference_selector_tool (harness/tools.py's
+    thin wrapper around backend/agent.py's _pick_reference(), neither
+    modified here, only called) — using this sequence's OWN computed
+    descriptors (length/charge/hydro%) as the target to match against,
+    since /score has no generation target of its own to match against.
+    Without this, PeptideBLEU was silently skipped (components: {}) for
+    every /score call that didn't explicitly pass --ref, even though
+    _pick_reference() already exists specifically to avoid a human having
+    to supply one. Activity defaults to "anti-bacterial" (-> amp preset)
+    when neither --activity nor a second positional is given, so the
+    auto-pick always has an activity to select a reference pool from.
     """
     positional, options = _parse_options(args)
     if not positional:
-        return {"error": "usage: /score SEQUENCE [--ref REFERENCE] [--activity amp]"}
+        return {"error": "usage: /score SEQUENCE [ACTIVITY] [--ref REFERENCE] [--activity amp]"}
 
     sequence = positional[0].upper()
     reference = options.get("ref", "")
-    activity = options.get("activity")
-    if activity:
-        from backend.agent import ACTIVITY_PRESET_MAP
+    raw_activity = options.get("activity") or (positional[1] if len(positional) > 1 else None) or "anti-bacterial"
 
-        activity = ACTIVITY_PRESET_MAP.get(activity, activity)
+    from backend.agent import ACTIVITY_PRESET_MAP
 
-    from harness.tools import descriptor_tool, peptide_bleu_tool, rulebook_tool
+    activity = ACTIVITY_PRESET_MAP.get(raw_activity, raw_activity)
+
+    from harness.tools import descriptor_tool, peptide_bleu_tool, reference_selector_tool, rulebook_tool
 
     descriptors = descriptor_tool.invoke({"sequence": sequence})
+
+    reference_used = reference
+    if not reference_used and "error" not in descriptors:
+        picked = reference_selector_tool.invoke(
+            {
+                "preset": activity,
+                "target_length": descriptors["length"],
+                "target_charge": descriptors["net_charge"],
+                "target_hydro_pct": descriptors.get("hydro_pct"),
+            }
+        )
+        reference_used = picked.get("reference", "")
+
     bleu = (
-        peptide_bleu_tool.invoke({"reference": reference, "sequence": sequence, "activity": activity})
-        if reference
+        peptide_bleu_tool.invoke({"reference": reference_used, "sequence": sequence, "activity": activity})
+        if reference_used
         else {}
     )
     rulebook = rulebook_tool.invoke({"sequence": sequence, "task": _OPEN_TASK})
@@ -208,6 +247,7 @@ def handle_score(args: list) -> dict:
         "descriptors": descriptors,
         "bleu_score": bleu.get("score"),
         "components": bleu.get("components", {}),
+        "reference_used": reference_used,
         "rulebook_score": rulebook.get("score"),
         "rulebook_valid": rulebook.get("valid"),
     }
@@ -252,7 +292,12 @@ def handle_edit(args: list) -> dict:
 
 
 def handle_compare(args: list) -> dict:
-    """/compare SEQUENCE1 SEQUENCE2 [--ref REFERENCE]"""
+    """/compare SEQUENCE1 SEQUENCE2 [--ref REFERENCE]
+
+    No longer reachable as a slash command (see module docstring) — kept
+    as a plain function because harness/mcp_server.py's compare_peptides
+    tool still calls it directly.
+    """
     positional, options = _parse_options(args)
     if len(positional) < 2:
         return {"error": "usage: /compare SEQUENCE1 SEQUENCE2 [--ref REFERENCE]"}
@@ -319,7 +364,7 @@ def handle_explain(args: list) -> dict:
     }
 
 
-_VALID_COMMANDS = ("/generate", "/score", "/edit", "/compare", "/history", "/explain")
+_VALID_COMMANDS = ("/generate", "/score", "/edit", "/explain")
 
 
 def execute_command(text: str, thread_id: str) -> dict | None:
@@ -336,18 +381,8 @@ def execute_command(text: str, thread_id: str) -> dict | None:
         result = handle_score(args)
     elif cmd == "/edit":
         result = handle_edit(args)
-    elif cmd == "/compare":
-        result = handle_compare(args)
     elif cmd == "/explain":
         result = handle_explain(args)
-    elif cmd == "/history":
-        n = 5
-        if args:
-            try:
-                n = int(args[0])
-            except ValueError:
-                pass
-        result = {"results": handle_history(thread_id, n)}
     else:
         result = {"error": f"unknown command: {cmd}", "valid_commands": list(_VALID_COMMANDS)}
 
