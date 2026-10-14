@@ -186,16 +186,32 @@ def _initial_prompt(
         ref_hydro = round(
             100 * sum(1 for aa in ref_upper if aa in _ANCHOR_HYDRO_AA) / len(ref_upper), 1
         )
+        # Bug fix: this block used to print the full reference sequence
+        # (`{ref_upper}`) directly above these same motif hints, letting the
+        # model trivially copy it verbatim instead of generating — exactly
+        # what this module's own docstring/CLAUDE.md's "pattern hints,
+        # never the full sequence" design says should never happen. Only
+        # the motif/charge/hydro hints are shown now; the full reference
+        # value is still used by _ANCHOR_CHARGE_AA/_ANCHOR_HYDRO_AA above to
+        # compute those hints, but never written into the prompt text.
+        #
+        # anticopy_fix.md Fix 2: the motif+charge+hydro hints above are
+        # apparently enough for a well-known reference (e.g. Penetratin in
+        # _CPP_REFS) to be completed verbatim from the model's own training
+        # data, even without the full sequence ever appearing in the
+        # prompt — "not identical to the reference" alone proved too soft
+        # against that memorization pull. Strengthened in place (not as an
+        # extra line) since this deployment is documented elsewhere in this
+        # module as unusually sensitive to added prompt text/length.
         anchor_section = (
-            f"\nREFERENCE SEQUENCE (use as structural inspiration):\n"
-            f"{ref_upper}\n"
-            f"Key patterns to approximate in your generated sequence:\n"
+            f"\nREFERENCE PATTERN (motifs only — not the full sequence):\n"
             f"- Opening motif (first 4 residues): {ref_upper[:4]}\n"
             f"- Closing motif (last 3 residues): {ref_upper[-3:]}\n"
             f"- Net charge: {ref_charge:+d}\n"
             f"- Hydrophobic fraction: {ref_hydro:.0f}%\n"
-            f"Generate a NOVEL sequence that shares similar motifs "
-            f"but is not identical to the reference.\n"
+            f"Generate a NOVEL sequence that only approximates these patterns — "
+            f"do not reproduce the reference, or any known/memorized peptide "
+            f"matching these patterns, verbatim.\n"
         )
 
         # The reference anchor above only ever shows a same-length-ish motif

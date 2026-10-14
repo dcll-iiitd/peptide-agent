@@ -46,7 +46,7 @@ EMPTY_RETRY_ATTEMPTS = 4
 
 def generate(
     prompt: str,
-    max_tokens: int = 512,
+    max_tokens: int = 2048,
     system: str | None = None,
     assistant_primer: str = "",
     temperature: float | None = None,

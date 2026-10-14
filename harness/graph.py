@@ -35,6 +35,16 @@ from harness.tools import (
     reference_selector_tool,
 )
 
+# Bug fix: mirrors backend/agent.py's NGRAM_FLOOR/BLOSUM_FLOOR exactly (same
+# values, same purpose) — track_best_node previously only checked
+# diagnostic.passed + threshold, so a candidate could clear threshold on
+# the aggregate weighted score alone while ngram_bleu/blosum (residue-
+# ordering/motif-similarity) sat near zero. CLAUDE.md documents this floor
+# as applying "uniformly at every iteration," but that was only ever true
+# on the legacy path; this closes the harness/legacy behavioral gap.
+NGRAM_FLOOR = 0.05
+BLOSUM_FLOOR = 0.15
+
 
 def _build_task(state: AgentState) -> dict:
     """Task dict in the shape backend/prompt_builder.py and backend/rulebook.py expect."""
@@ -87,6 +97,8 @@ def rag_node(state: AgentState) -> dict:
 
 
 def generate_node(state: AgentState) -> dict:
+    import re
+
     from backend import models
     from backend.agent import PepForgeAgent
     from backend.prompt_builder import build_prompt, get_system_prompt
@@ -95,8 +107,13 @@ def generate_node(state: AgentState) -> dict:
     target_length = task["length"]
 
     prompt = build_prompt(task, [], state["rag_examples"], state["reference"])
+    # 3000 (was 2048) — verified live (2026-10-14) that 2048 wasn't always
+    # enough headroom for this reasoning model to finish its <think> block
+    # before the cap, which is exactly the case the fallback below exists
+    # for; raising the budget reduces how often that fallback is needed in
+    # the first place, it doesn't replace it.
     gen_max_tokens = (
-        max(600, target_length + 400)
+        3000
         if models.is_reasoning_model()
         else target_length + 5
     )
@@ -107,7 +124,60 @@ def generate_node(state: AgentState) -> dict:
         system=get_system_prompt(),
     )
 
-    sequence = PepForgeAgent().extract_sequence(raw, target_length)
+    # Reasoning models (DeepSeek-R1 etc.) emit a <think>...</think> block
+    # before the actual sequence; stripped here so extract_sequence() only
+    # ever sees the final answer, not raw reasoning prose that could get
+    # misparsed as a short AA-letter fragment.
+    if models.is_reasoning_model():
+        think_end = raw.find('</think>')
+        if think_end != -1:
+            raw = raw[think_end + len('</think>'):].strip()
+        else:
+            # Bug fix: verified live (2026-10-14) — when the model hits the
+            # token cap mid-reasoning with no </think> at all, falling
+            # through to extract_sequence()'s regex-search over the full
+            # raw reasoning prose picks up short, incidental AA-letter runs
+            # from the reasoning text itself (e.g. "GIGK", the opening of a
+            # well-known AMP motif the model was reasoning ABOUT, not
+            # generating) — a 4-letter fragment that's spellable in AA
+            # letters but isn't the model's intended answer. The model's
+            # actual in-progress answer (if it got that far before running
+            # out of budget) is far more likely to be the LAST long AA-only
+            # run in the text than any short one earlier in the reasoning,
+            # so that's used as the best guess instead. If no run of 8+
+            # chars exists at all, return empty rather than a garbage
+            # fragment — extract_sequence('') returns '' below, and this
+            # graph (unlike backend/agent.py's legacy path) never loops
+            # back through generate_node, so an empty current_sequence
+            # isn't a fresh-LLM retry here; it flows into edit_node on the
+            # next lap, whose length-violation handler deterministically
+            # pads an empty/too-short sequence rather than ever re-editing
+            # a fabricated reasoning fragment.
+            #
+            # Bug fix (found live, same verification pass): searching
+            # raw.upper() instead of raw matched "ALTERNATIVELY" — a
+            # lowercase-origin English word from ordinary reasoning prose
+            # ("Alternatively, I could...") — because uppercasing the
+            # whole text first destroys the exact signal (original casing)
+            # that would otherwise reject it. The system prompt instructs
+            # the model to output the sequence itself in all-caps, so a
+            # genuine in-progress answer is already uppercase in the raw
+            # text; scanning raw directly (no .upper()) only matches runs
+            # that were ALREADY uppercase, the same origin-safety principle
+            # extract_sequence()'s own case-origin filter uses elsewhere in
+            # this codebase (backend/agent.py's _origin_safe_matches()).
+            aa_runs = re.findall(r'[ACDEFGHIKLMNPQRSTVWY]{8,}', raw)
+            raw = aa_runs[-1] if aa_runs else ''
+
+    # extract_sequence() is a pure method — doesn't touch self.threshold/
+    # self.max_retries or any other instance state — but it's only ever
+    # defined on PepForgeAgent, not as a standalone module-level function
+    # (confirmed: no `def extract_sequence` at module scope in
+    # backend/agent.py). __new__() skips __init__() entirely rather than
+    # constructing a real agent (with its own gateway_url/api_key/
+    # threshold/max_retries setup) just to call one side-effect-free method.
+    agent = PepForgeAgent.__new__(PepForgeAgent)
+    sequence = agent.extract_sequence(raw, target_length)
     if sequence and target_length:
         sequence = sequence[:target_length]
 
@@ -186,18 +256,58 @@ def track_best_node(state: AgentState) -> dict:
     )
     candidates = state["candidates"] + [candidate]
 
+    # Bug fix: an exact copy of the reference trivially scores 1.0 on every
+    # PeptideBLEU component (every similarity metric is satisfied by
+    # identity) and would otherwise sail past threshold/rulebook checks as
+    # the "best" candidate — defeating the actual objective (novel
+    # generation). Still recorded in `candidates` for trace/history, but
+    # never eligible to become best_overall/best_passing, and always
+    # counted as a non-improving ("stuck") lap so the edit_stuck escalation
+    # tiers kick in on the next iteration instead of the run accepting it.
+    reference = state.get("reference", "")
+    is_exact_copy = bool(reference) and candidate.sequence.strip().upper() == reference.strip().upper()
+
+    # Bug fix: verified live (2026-10-14) — rag_node() shows up to 5 full
+    # literal peptide sequences in the Attempt-1 prompt ("Do NOT copy them
+    # directly..."), but that instruction is advisory only; nothing
+    # previously checked whether the model just copied one verbatim. The
+    # is_exact_copy guard above only ever compared against `reference`
+    # (the scoring target), never against the RAG examples, so a RAG copy
+    # sailed through as an apparently-legitimate high-scoring candidate.
+    # Same rejection treatment as is_exact_copy: recorded in `candidates`
+    # for trace/history, never eligible to become best_overall/best_passing.
+    rag_seqs = {
+        ex.get("sequence", "").strip().upper()
+        for ex in (state.get("rag_examples") or [])
+        if ex.get("sequence")
+    }
+    is_rag_copy = candidate.sequence.strip().upper() in rag_seqs
+    is_memorized_copy = is_exact_copy or is_rag_copy
+
     prev_best_overall = state["best_overall"]
-    if prev_best_overall is not None and candidate.bleu_score <= prev_best_overall.bleu_score:
+    if is_memorized_copy or (
+        prev_best_overall is not None and candidate.bleu_score <= prev_best_overall.bleu_score
+    ):
         consecutive_stuck = state["consecutive_stuck"] + 1
     else:
         consecutive_stuck = 0
 
     best_overall = prev_best_overall
-    if best_overall is None or candidate.bleu_score > best_overall.bleu_score:
+    if not is_memorized_copy and (best_overall is None or candidate.bleu_score > best_overall.bleu_score):
         best_overall = candidate
 
     diagnostic = state["current_diagnostic"]
-    passed = bool(diagnostic and diagnostic.passed) and candidate.bleu_score >= state["threshold"]
+    components = state.get("current_components") or {}
+    clears_floors = (
+        components.get("ngram_bleu", 1.0) >= NGRAM_FLOOR
+        and components.get("blosum", 1.0) >= BLOSUM_FLOOR
+    )
+    passed = (
+        not is_memorized_copy
+        and clears_floors
+        and bool(diagnostic and diagnostic.passed)
+        and candidate.bleu_score >= state["threshold"]
+    )
     best_passing = state["best_passing"]
     if passed and (best_passing is None or candidate.bleu_score > best_passing.bleu_score):
         best_passing = candidate

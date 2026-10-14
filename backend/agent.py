@@ -557,13 +557,75 @@ class PepForgeAgent:
                 score = None
             return validation, rb_score, comp, score
 
-        def is_passed(score, comp, validation) -> bool:
+        def is_exact_copy(seq: str) -> bool:
+            """An exact copy of the reference trivially scores 1.0 on every
+            PeptideBLEU component (every similarity metric is satisfied by
+            identity) — NGRAM_FLOOR/BLOSUM_FLOOR are minimum floors and can't
+            catch this, since identity maximizes rather than fails them.
+            Mirrors harness/graph.py's track_best_node() exact-copy guard,
+            which already exists for the harness path; this ports the same
+            check to the legacy path (anticopy_fix.md investigation)."""
+            return bool(effective_reference) and bool(seq) and seq.strip().upper() == effective_reference.strip().upper()
+
+        def is_repetitive(seq: str) -> bool:
+            """A sequence dominated by one short repeating motif (e.g. a
+            model degenerating into "KLLKLLKLLKLLKLLKLLKLLK"-style padding)
+            is trivial, not a genuine candidate — same rejection class as
+            an exact/RAG copy: aggregate metrics like property_distribution/
+            structural can reward this without it being a real generation.
+            Checks every repeat-unit length from 4 to len(seq)//2 at every
+            starting position for the longest run of consecutive (tandem)
+            repeats of that unit; flags the sequence if any such run alone
+            covers more than 60% of the total sequence length."""
+            n = len(seq)
+            for unit_len in range(4, n // 2 + 1):
+                for start in range(n - unit_len + 1):
+                    unit = seq[start:start + unit_len]
+                    repeats = 1
+                    pos = start + unit_len
+                    while seq[pos:pos + unit_len] == unit:
+                        repeats += 1
+                        pos += unit_len
+                    if unit_len * repeats > 0.6 * n:
+                        return True
+            return False
+
+        def is_rag_copy(seq: str) -> bool:
+            """RAG retrieval (ATTEMPT 1 only) shows up to 5 full literal
+            peptide sequences in the prompt ("Do NOT copy them directly...")
+            — advisory only, nothing previously checked whether the model
+            just copied one verbatim. Verified live (2026-10-14): it does,
+            and that copy was accepted as an apparently-legitimate high-
+            scoring candidate since is_exact_copy() only ever compared
+            against effective_reference, never against the RAG examples.
+            `rag_examples` is read via closure — populated once during
+            ATTEMPT 1 (or left at its `[]` default for a prompt_override
+            run, where this is always False)."""
+            if not seq or not rag_examples:
+                return False
+            seq_upper = seq.strip().upper()
+            return any(
+                seq_upper == str(ex.get('sequence', '')).strip().upper()
+                for ex in rag_examples
+                if ex.get('sequence')
+            )
+
+        def is_memorized_copy(seq: str) -> bool:
+            return is_exact_copy(seq) or is_rag_copy(seq)
+
+        def is_passed(score, comp, validation, seq: str = '') -> bool:
             ref_floor_ok = (
                 not effective_reference
                 or (comp.get('ngram_bleu', 1.0) >= NGRAM_FLOOR
                     and comp.get('blosum', 1.0) >= BLOSUM_FLOOR)
             )
-            return validation['valid'] and (score is None or score >= threshold) and ref_floor_ok
+            return (
+                validation['valid']
+                and (score is None or score >= threshold)
+                and ref_floor_ok
+                and not is_memorized_copy(seq)
+                and not is_repetitive(seq)
+            )
 
         best_passing_result: Optional[AgentResult] = None   # rulebook-valid, by score
         best_overall_result: Optional[AgentResult] = None   # any sequence, by score
@@ -586,12 +648,26 @@ class PepForgeAgent:
                 rag_examples_used=rag_examples_used,
                 rag_sequences=rag_sequences,
             )
+            # Anti-copy guard (anticopy_fix.md Fix 1, mirrors harness/graph.py's
+            # track_best_node()): an exact reference copy is still recorded in
+            # `trace` above for debugging, but is never eligible to become the
+            # best-overall/best-passing result — otherwise it would trivially
+            # win on PeptideBLEU (1.0 on every component) and rulebook-validity
+            # alike, defeating the actual objective of novel generation. Also
+            # covers a verbatim RAG-example copy (is_rag_copy), the same
+            # memorization failure via a second exposure path, and a
+            # sequence dominated by one short repeating motif (is_repetitive)
+            # — not memorized from anywhere, but equally not a genuine
+            # generation.
+            copy_candidate = is_memorized_copy(seq) or is_repetitive(seq)
             overall_bleu = best_overall_result.score if best_overall_result is not None else -1.0
-            if (best_overall_result is None
-                    or cur_bleu > overall_bleu
-                    or (cur_bleu == overall_bleu and rb_score > best_overall_result.rulebook_score)):
+            if not copy_candidate and (
+                best_overall_result is None
+                or cur_bleu > overall_bleu
+                or (cur_bleu == overall_bleu and rb_score > best_overall_result.rulebook_score)
+            ):
                 best_overall_result = cur_result
-            if validation['valid']:
+            if validation['valid'] and not copy_candidate:
                 passing_bleu = best_passing_result.score if best_passing_result is not None else -1.0
                 if (best_passing_result is None
                         or cur_bleu > passing_bleu
@@ -610,8 +686,14 @@ class PepForgeAgent:
         edit_base_components: dict = {}
         edit_base_validation: dict = {}
 
+        # Defaults so is_rag_copy() below always has something to check
+        # against — rag_examples (the full dict list, as opposed to
+        # rag_sequences, the string-only summary already defaulted here)
+        # is only ever populated inside ATTEMPT 1's no-prompt_override
+        # branch; a prompt_override run never touches it otherwise.
         rag_examples_used = 0
         rag_sequences: list = []
+        rag_examples: list = []
 
         # ====================================================================
         # ATTEMPT 1 — generate from scratch. Runs exactly once. Internal-retry
@@ -743,7 +825,7 @@ class PepForgeAgent:
         passed = False
         if seq:
             validation, rb_score, comp, score = score_candidate(seq)
-            passed = is_passed(score, comp, validation)
+            passed = is_passed(score, comp, validation, seq)
 
             logger.info(
                 "[A%d] GENERATE seq=%s len=%d charge=%+d hydro=%.2f rb=%.2f bleu=%s passed=%s",
@@ -762,11 +844,21 @@ class PepForgeAgent:
             if on_attempt:
                 on_attempt(log)
 
-            best_sequence, best_score = seq, score
-            best_rb_score, best_components, best_validation = rb_score, comp, validation
+            # best_sequence/best_score (local "true best" trackers driving
+            # improved_true_best below) stay at their '' / None init values
+            # when attempt 1 is an exact reference copy OR a verbatim RAG-
+            # example copy — otherwise they'd freeze at the ceiling score
+            # a copy trivially gets, making improved_true_best permanently
+            # False for every later genuine candidate. edit_base_sequence/
+            # edit_base_score are set unconditionally regardless — the edit
+            # loop needs the copy as its starting point precisely so it can
+            # mutate away from it.
+            if not is_memorized_copy(seq) and not is_repetitive(seq):
+                best_sequence, best_score = seq, score
+                best_rb_score, best_components, best_validation = rb_score, comp, validation
             edit_base_sequence, edit_base_score = seq, score
             edit_base_rb_score, edit_base_components, edit_base_validation = rb_score, comp, validation
-            track_best(best_sequence, best_score, best_rb_score, best_components, best_validation, attempt_num)
+            track_best(seq, score, rb_score, comp, validation, attempt_num)
 
             trace_log.log_iteration(
                 attempt_num=attempt_num, task=task, seq=seq,
@@ -987,7 +1079,20 @@ class PepForgeAgent:
                     )]
 
                 def cand_key(c):
-                    _, _, s, rb, _, _ = c
+                    _, c_seq, s, rb, _, _ = c
+                    # Anti-copy guard: never let a candidate that exactly
+                    # reproduces the reference win selection — if every
+                    # candidate this iteration happens to be a copy (all
+                    # tied at the floor), max() just picks among them and
+                    # the unchanged-sequence/edit_stuck path below detects
+                    # no real progress was made, same as any other no-op.
+                    # Covers both an exact reference copy and a verbatim
+                    # RAG-example copy — same memorization failure, two
+                    # exposure paths — plus a short-motif repetition
+                    # (is_repetitive), a different but equally trivial
+                    # degenerate candidate.
+                    if is_memorized_copy(c_seq) or is_repetitive(c_seq):
+                        return (float('-inf'), float('-inf'))
                     return (s if s is not None else -1.0, rb)
 
                 w_mode, w_seq, w_score, w_rb, w_comp, w_val = max(candidates, key=cand_key)
@@ -995,10 +1100,20 @@ class PepForgeAgent:
                 # True-best update: strictly monotonic, unaffected by the escape
                 # mechanism below. No reference: judge by rulebook_score instead
                 # of PeptideBLEU (score stays None for every candidate otherwise).
+                # is_memorized_copy(w_seq) guard: cand_key already keeps a copy
+                # from winning whenever any non-copy candidate exists, but in
+                # the pathological case where every candidate this iteration is
+                # a copy, w_seq itself could be one — never let it become the
+                # true best regardless (belt-and-suspenders with track_best()'s
+                # own exclusion below).
                 improved_true_best = (
-                    ((w_score if w_score is not None else -1.0)
-                     > (best_score if best_score is not None else -1.0))
-                    if effective_reference else (w_rb > best_rb_score)
+                    not is_memorized_copy(w_seq)
+                    and not is_repetitive(w_seq)
+                    and (
+                        ((w_score if w_score is not None else -1.0)
+                         > (best_score if best_score is not None else -1.0))
+                        if effective_reference else (w_rb > best_rb_score)
+                    )
                 )
                 if improved_true_best:
                     best_sequence, best_score = w_seq, w_score
@@ -1039,7 +1154,7 @@ class PepForgeAgent:
                 # merely-explored, momentarily-worse) edit base — early-stop
                 # should only fire once the actual best-ever answer clears the
                 # threshold, never on an exploratory dip.
-                passed = is_passed(best_score, best_components, best_validation)
+                passed = is_passed(best_score, best_components, best_validation, best_sequence)
                 label_weakest = 'det' if w_mode == 'deterministic' else (weakest or w_mode)
 
                 logger.info(
