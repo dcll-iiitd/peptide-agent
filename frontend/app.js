@@ -9,10 +9,9 @@ import { renderHistoryView } from './pages/HistoryPage.js';
 import { initGeneratePage } from './pages/GeneratePage.js';
 import { renderAnalyzeView } from './pages/AnalyzePage.js';
 import { renderCompareView } from './pages/ComparePage.js';
-import { renderScoreView } from './pages/ScorePage.js';
 
 /* ── Router + sidebar ──────────────────────────────────────────────────── */
-const VIEWS = ['generate', 'analyze', 'compare', 'score', 'history'];
+const VIEWS = ['generate', 'analyze', 'compare', 'history'];
 
 // Minimal "router state" hand-off (frontend_phase8i_actions.md's "simple
 // router state object — no URL routing needed"), built out as far as each
@@ -29,8 +28,7 @@ function navigateTo(view, state) {
   });
   if (view === 'history') renderHistoryView();
   if (view === 'analyze') renderAnalyzeView((state && state.sequence) || null);
-  if (view === 'compare') renderCompareView((state && state.candidateA) || null);
-  if (view === 'score') renderScoreView();
+  if (view === 'compare') renderCompareView((state && state.candidateA) || null, (state && state.candidateB) || null);
   if (window.innerWidth <= 768) {
     document.getElementById('sidebar').classList.remove('drawer-open');
   }

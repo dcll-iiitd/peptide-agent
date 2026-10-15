@@ -49,9 +49,6 @@
         <button class="nav-item" data-view="compare" onclick="navigateTo('compare')">
           <span class="nav-icon">🧪</span><span class="nav-label">Compare</span>
         </button>
-        <button class="nav-item" data-view="score" onclick="navigateTo('score')">
-          <span class="nav-icon">📊</span><span class="nav-label">Score</span>
-        </button>
         <button class="nav-item" data-view="history" onclick="navigateTo('history')">
           <span class="nav-icon">🕘</span><span class="nav-label">History</span>
         </button>
@@ -236,7 +233,7 @@ e.g. Generate an antibacterial peptide with 15–20 residues, charge +2 to +5, h
 
           <div class="result-card" id="commandResultCard" style="display:none">
             <div class="result-card-header"><span class="result-icon">⌘</span> COMMAND RESULT</div>
-            <pre id="commandResultOutput" class="command-output"></pre>
+            <div id="commandResultBody"></div>
           </div>
 
           <div class="result-card" id="bestCandidateCard" style="display:none">
@@ -257,7 +254,14 @@ e.g. Generate an antibacterial peptide with 15–20 residues, charge +2 to +5, h
               <button class="btn-chip" onclick="analyzeCandidate()">Analyze</button>
               <button class="btn-chip" onclick="compareCandidate()">Compare</button>
               <button class="btn-chip" onclick="refineCandidate()">Refine</button>
-              <button class="btn-chip" onclick="exportFasta()">Export</button>
+              <div class="export-menu-wrap">
+                <button class="btn-chip" onclick="toggleExportMenu(event)">Export ▾</button>
+                <div class="export-menu-dropdown" id="exportMenuDropdown" style="display:none">
+                  <div class="history-dropdown-item" onclick="exportMenuFasta(event)">Export FASTA</div>
+                  <div class="history-dropdown-sep"></div>
+                  <div class="history-dropdown-item" onclick="exportMenuPdb(event)">Download PDB</div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -288,8 +292,6 @@ e.g. Generate an antibacterial peptide with 15–20 residues, charge +2 to +5, h
       <section class="view" data-view="analyze" id="view-analyze"></section>
 
       <section class="view" data-view="compare" id="view-compare"></section>
-
-      <section class="view" data-view="score" id="view-score"></section>
 
       <section class="view" data-view="history" id="view-history">
         <div class="view-placeholder">
