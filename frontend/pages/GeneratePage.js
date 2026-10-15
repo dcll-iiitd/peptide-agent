@@ -10,16 +10,22 @@ import { resumeHITL } from '../services/api.js';
 import { streamGenerate } from '../services/sse.js';
 import { saveExperiment } from '../services/history.js';
 import { slash } from '../services/commands.js';
+import { renderCommandListHtml, renderCommandFormHtml } from '../components/CommandForms.js';
+import { humanizeNetworkError } from '../components/errorMessages.js';
 import { resetProgressTimeline, setStepState } from '../components/AgentProgress.js';
 import { showLoading, hideLoading } from '../components/LoadingState.js';
-import { showErrorCard, hideErrorCard } from '../components/ErrorState.js';
+import { showErrorCard, hideErrorCard, escapeHtml } from '../components/ErrorState.js';
 import { showHitlPanel, hideHitlPanel } from '../components/HITLPanel.js';
 import { renderHeroCard } from '../components/CandidateCard.js';
 import { renderPropertiesTab, fmtCharge } from '../components/PropertyCard.js';
 import { renderPeptideBleuTab } from '../components/PeptideBLEU.js';
-import { renderStructureCard } from '../components/StructureViewer.js';
+import { renderStructureCard, downloadStructurePdb } from '../components/StructureViewer.js';
 import { renderNoveltyTab } from '../components/NoveltyCard.js';
 import { renderViolationsHtml } from '../components/DiagnosticCard.js';
+import { showToast } from '../components/Toast.js';
+import { toggleDropdown, closeDropdown } from '../components/Dropdown.js';
+import { computeDescriptorsClientSide } from '../components/descriptorMath.js';
+import { renderSlashResult } from '../components/SlashResultCard.js';
 
 /* ── Config ──────────────────────────────────────────────────────────────── */
 const ALL_ACTIVITIES = [
@@ -139,30 +145,71 @@ function readAdvancedPanel() {
   };
 }
 
-/* ── Slash command menu ────────────────────────────────────────────────────── */
-const COMMAND_MENU_ITEMS = [
-  { cmd: '/generate', desc: 'Generate peptide' },
-  { cmd: '/score', desc: 'Score sequence' },
-  { cmd: '/edit', desc: 'Refine sequence' },
-  { cmd: '/compare', desc: 'Compare candidates' },
-  { cmd: '/explain', desc: 'Explain sequence' },
-  { cmd: '/history', desc: 'Previous experiments' },
-];
+/* ── Slash command menu — contextual forms ─────────────────────────────────
+   Selecting a command used to just insert "/score " into the main input
+   and leave the researcher to remember CLI syntax. Now it shows the
+   matching small form right there in the popover (built by
+   components/CommandForms.js); submitting builds the equivalent CLI text
+   internally and runs it through the exact same runSlashCommand() path
+   below — no second result renderer. /compare and /history (and the
+   /analyze shortcut) were removed from this palette entirely — see
+   components/CommandForms.js's header comment — so this menu only ever
+   shows /generate /score /edit /explain now. /generate just focuses the
+   main input. */
+let activeCommandForm = null;
 
-function toggleCommandMenu() {
+function showCommandList() {
+  activeCommandForm = null;
   const menu = document.getElementById('commandMenu');
-  if (menu.style.display !== 'none') { menu.style.display = 'none'; return; }
-  menu.innerHTML = COMMAND_MENU_ITEMS.map(c =>
-    `<div class="command-menu-item" onclick="insertCommand('${c.cmd}')"><b>${c.cmd}</b>${c.desc}</div>`
-  ).join('');
+  menu.innerHTML = renderCommandListHtml();
   menu.style.display = 'block';
 }
 
-function insertCommand(cmd) {
-  const input = document.getElementById('genInput');
-  input.value = `${cmd} `;
-  input.focus();
+function toggleCommandMenu() {
+  const menu = document.getElementById('commandMenu');
+  if (menu.style.display !== 'none') { menu.style.display = 'none'; activeCommandForm = null; return; }
+  showCommandList();
+}
+
+function selectCommandForm(cmd) {
+  if (cmd === '/generate') {
+    document.getElementById('commandMenu').style.display = 'none';
+    document.getElementById('genInput').focus();
+    return;
+  }
+  activeCommandForm = cmd;
+  const menu = document.getElementById('commandMenu');
+  menu.innerHTML = renderCommandFormHtml(cmd);
+  menu.style.display = 'block';
+}
+
+function requireSeq(id) {
+  const el = document.getElementById(id);
+  const val = el ? el.value.trim().toUpperCase() : '';
+  if (!val) alert('Enter a peptide sequence first.');
+  return val;
+}
+
+function submitCommandForm(cmd) {
+  let text = null;
+  if (cmd === '/score') {
+    const seq = requireSeq('cfSeq');
+    if (!seq) return;
+    const ref = document.getElementById('cfRef').value.trim().toUpperCase();
+    text = `/score ${seq}` + (ref ? ` --ref ${ref}` : '');
+  } else if (cmd === '/explain') {
+    const seq = requireSeq('cfSeq');
+    if (!seq) return;
+    text = `/explain ${seq}`;
+  } else if (cmd === '/edit') {
+    const seq = requireSeq('cfSeq');
+    if (!seq) return;
+    const fix = document.getElementById('cfFix').value;
+    text = `/edit ${seq} --fix ${fix}`;
+  }
+  if (!text) return;
   document.getElementById('commandMenu').style.display = 'none';
+  runSlashCommand(text);
 }
 
 function onGenInputChange() {
@@ -359,8 +406,16 @@ async function runGeneration(spec) {
       setStepState('refinement', 'completed');
       setStepState('post_hoc', 'completed');
       setStepState('output_guardrail', 'completed');
+      // Bug fix: saveExperiment() now expects a normalizeResult()-shaped
+      // object (unified harness/legacy field names) — passing the raw
+      // evt.result silently missed structure/novelty data on the legacy
+      // path, since its raw shape nests those fields differently
+      // (secondary_structure/blast_similarity/plddt_pdb) than what
+      // saveExperiment() reads. currentResult is set synchronously inside
+      // showBestCandidate() one line above, so it's already the
+      // normalized shape by the time this call runs.
       showBestCandidate(evt.result);
-      saveExperiment(evt.result, currentSpec);
+      saveExperiment(currentResult, currentSpec);
       window.renderExperimentsList && window.renderExperimentsList();
     },
     onError: (evt) => {
@@ -386,8 +441,6 @@ async function runGeneration(spec) {
 }
 
 async function runSlashCommand(text) {
-  if (!commandThreadId) commandThreadId = crypto.randomUUID();
-
   document.getElementById('generateEmpty').style.display = 'none';
   document.getElementById('generateActive').style.display = 'block';
   document.getElementById('specCard').style.display = 'none';
@@ -395,16 +448,18 @@ async function runSlashCommand(text) {
   document.getElementById('bestCandidateCard').style.display = 'none';
   hideErrorCard();
 
-  const out = document.getElementById('commandResultOutput');
+  const out = document.getElementById('commandResultBody');
   const card = document.getElementById('commandResultCard');
-  out.textContent = 'Running…';
   card.style.display = 'block';
 
+  out.innerHTML = '<p class="text-muted">Running…</p>';
+
+  if (!commandThreadId) commandThreadId = crypto.randomUUID();
   try {
     const data = await slash(text, commandThreadId);
-    out.textContent = JSON.stringify(data, null, 2);
+    renderSlashResult('commandResultBody', data, text);
   } catch (err) {
-    out.textContent = `Error: ${err}`;
+    out.innerHTML = `<p class="error-message">${humanizeNetworkError()}</p><details class="error-technical"><summary>Technical details ▾</summary><pre>${escapeHtml(String(err))}</pre></details>`;
   }
 }
 
@@ -424,21 +479,41 @@ function normalizeResult(result) {
   let descriptors = result.descriptors || null;        // harness, Decision 9
   let descriptorsPartial = false;
   if (!descriptors && result.rulebook) {
+    // Bug fix: gravy/aromaticity/mol_weight are computed client-side here
+    // for the legacy path — backend/rulebook.py's validate_sequence()
+    // (legacy's only descriptor source) never computes them at all, and
+    // backend/server.py is protected, so there is no server-side value to
+    // read. computeDescriptorsClientSide() replicates
+    // harness/descriptor.py's exact formulas (same AA weight/KD-scale
+    // tables, same rounding) — not a new calculation, just run here
+    // because that Python function isn't reachable for a legacy result at
+    // render time. Values vary with sequence, same as the real backend
+    // calculation would produce.
+    const clientMath = result.sequence ? computeDescriptorsClientSide(result.sequence) : null;
     descriptors = {
       length: result.rulebook.length,
       net_charge: result.rulebook.net_charge,
       hydro_pct: result.rulebook.hydro_percent ?? result.rulebook.hydrophobicity,
       charge_class: result.rulebook.charge_class,
       length_class: result.rulebook.length_class,
-      gravy: null, aromaticity: null, mol_weight: null,
+      gravy: clientMath ? clientMath.gravy : null,
+      aromaticity: clientMath ? clientMath.aromaticity : null,
+      mol_weight: clientMath ? clientMath.mol_weight : null,
     };
     descriptorsPartial = true;
   }
+
+  // Bug fix: DiagnosticResult.passed (harness, now serialized as
+  // rulebook_passed) / the rulebook dict's "valid" key (legacy) — a real
+  // per-candidate boolean, as opposed to result.status which reflects the
+  // whole run's outcome, not this candidate's rulebook validation.
+  const rulebookPassed = result.rulebook ? result.rulebook.valid : result.rulebook_passed;
 
   return {
     sequence: result.sequence || '',
     score: result.score,
     rulebook_score: result.rulebook_score,
+    rulebook_passed: rulebookPassed != null ? rulebookPassed : null,
     reference_used: result.reference_used,
     components: result.components || {},
     iterations: result.iterations,
@@ -523,6 +598,17 @@ function compareCandidate() {
   window.navigateTo('compare', seq ? { candidateA: seq } : undefined);
 }
 
+// Phase 8i (frontend_phase8i_actions.md) — pre-populates activity/length/
+// charge/hydro and deliberately does NOT auto-start generation ("let
+// researcher confirm"). The doc's "optionally pre-populate reference with
+// current sequence" is intentionally skipped: there is no reference
+// input anywhere in the Advanced panel today, and backend/server.py's
+// _harness_task_overrides() already documents why one wouldn't do
+// anything on the default (harness) path even if added — rag_node
+// unconditionally overwrites state["reference"] with its own
+// auto-selected pick every run, discarding any user-supplied value. Per
+// this project's "no buttons/fields that do nothing" rule, adding a
+// reference field here would be cosmetic rather than real functionality.
 function refineCandidate() {
   const spec = currentSpec;
   const seq = currentResult && currentResult.sequence;
@@ -550,7 +636,7 @@ function renderOverviewTab(r) {
     <div class="overview-grid">
       <div class="spec-row"><span class="spec-label">Activity</span><span class="spec-value">${r.activity || '(general)'}</span></div>
       <div class="spec-row"><span class="spec-label">Length</span><span class="spec-value">${(r.descriptors && r.descriptors.length != null) ? r.descriptors.length : r.sequence.length} aa</span></div>
-      <div class="spec-row"><span class="spec-label">Rulebook</span><span class="spec-value">${r.status === 'complete' ? '✓ Passed' : '○ ' + (r.status || 'unknown')}</span></div>
+      <div class="spec-row"><span class="spec-label">Rulebook</span><span class="spec-value">${r.rulebook_passed === true ? '✓ Passed' : r.rulebook_passed === false ? '✗ Failed' : '– Unknown'}</span></div>
       <div class="spec-row"><span class="spec-label">PeptideBLEU</span><span class="spec-value">${r.score != null ? r.score.toFixed(4) : '–'}</span></div>
       <div class="spec-row"><span class="spec-label">Iterations</span><span class="spec-value">${r.iterations ?? '–'}</span></div>
       <div class="spec-row"><span class="spec-label">Time</span><span class="spec-value">${r.time_seconds != null ? r.time_seconds.toFixed(1) + 's' : '–'}</span></div>
@@ -610,7 +696,7 @@ function renderTraceTab(r) {
 function copySequence() {
   const seq = document.getElementById('resultSequence').textContent.trim();
   if (!seq) return;
-  navigator.clipboard?.writeText(seq).catch(() => {});
+  navigator.clipboard?.writeText(seq).then(() => showToast('Copied!')).catch(() => {});
 }
 
 function exportFasta() {
@@ -628,6 +714,32 @@ function exportFasta() {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+/* ── Export dropdown (Phase 8i) ────────────────────────────────────────────── */
+function toggleExportMenu(event) {
+  event.stopPropagation();
+  toggleDropdown('exportMenuDropdown', '.export-menu-wrap');
+}
+
+function exportMenuFasta(event) {
+  event.stopPropagation();
+  closeDropdown();
+  exportFasta();
+}
+
+function exportMenuPdb(event) {
+  event.stopPropagation();
+  closeDropdown();
+  // currentResult.pdb_string is checked here (not just inside
+  // downloadStructurePdb) so a missing PDB gets the specific "PDB not
+  // available" message the doc asks for, rather than downloadStructurePdb
+  // silently no-op-ing.
+  if (currentResult && currentResult.pdb_string) {
+    downloadStructurePdb('tabStructure');
+  } else {
+    showToast('PDB not available');
+  }
 }
 
 /* ── Error retry ─────────────────────────────────────────────────────────── */
@@ -663,11 +775,15 @@ window.newExperiment = newExperiment;
 window.applyTemplate = applyTemplate;
 window.onGenInputChange = onGenInputChange;
 window.toggleCommandMenu = toggleCommandMenu;
-window.insertCommand = insertCommand;
+window.showCommandList = showCommandList;
+window.selectCommandForm = selectCommandForm;
+window.submitCommandForm = submitCommandForm;
 window.toggleAdvancedPanel = toggleAdvancedPanel;
 window.startGeneration = startGeneration;
 window.copySequence = copySequence;
-window.exportFasta = exportFasta;
+window.toggleExportMenu = toggleExportMenu;
+window.exportMenuFasta = exportMenuFasta;
+window.exportMenuPdb = exportMenuPdb;
 window.switchResultTab = switchResultTab;
 window.hitlDecide = hitlDecide;
 window.refineCandidate = refineCandidate;

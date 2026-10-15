@@ -3,7 +3,7 @@
    button's onclick="retryGeneration()" is a hardcoded global-function
    reference — same convention already used elsewhere in this codebase
    for dynamically-injected onclick handlers (loadExperiment,
-   showHistoryDetail, insertCommand, inspectResidue), so GeneratePage.js
+   showHistoryDetail, selectCommandForm, inspectResidue), so GeneratePage.js
    must expose window.retryGeneration. */
 export function escapeHtml(s) {
   const div = document.createElement('div');
